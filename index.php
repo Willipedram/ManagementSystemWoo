@@ -2,6 +2,7 @@
 session_start();
 $loggedIn = isset($_SESSION['auth']) && $_SESSION['auth'] === true;
 $dbConnected = isset($_SESSION['db']);
+$logDbConnected = isset($_SESSION['logdb']);
 ?>
 <!doctype html>
 <html lang="fa" dir="rtl">
@@ -104,7 +105,7 @@ $('#auto-config').click(function(){
        $('#db_host').val(res.host);
        $('#db_name').val(res.name);
        $('#db_user').val(res.user);
-      $('#db_pass').val(res.pass);
+       $('#db_pass').val(res.pass);
        if(res.prefix){ $('#db_prefix').val(res.prefix); }
      }else{
        Swal.fire('خطا',res.message,'error');
@@ -148,6 +149,63 @@ $('#connect-btn').click(function(){
 });
 </script>
 
+<?php elseif(!$logDbConnected): ?>
+<div class="container">
+<div id="localdb-box" class="mx-auto">
+  <div class="card">
+    <div class="card-header text-center">اتصال پایگاه داده سامانه</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label">نام میزبان</label>
+        <input type="text" id="local_host" class="form-control">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">نام پایگاه</label>
+        <input type="text" id="local_name" class="form-control">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">نام کاربری</label>
+        <input type="text" id="local_user" class="form-control">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">رمز عبور</label>
+        <input type="password" id="local_pass" class="form-control">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">پیشوند جداول</label>
+        <input type="text" id="local_prefix" class="form-control" value="msw_">
+      </div>
+      <button id="local-connect-btn" class="btn btn-primary w-100">اتصال</button>
+    </div>
+  </div>
+</div>
+</div>
+<script>
+$(function(){
+  $.post('ajax.php',{action:'local_load_config'},function(res){
+    if(res.success){
+      $('#local_host').val(res.host);
+      $('#local_name').val(res.name);
+      $('#local_user').val(res.user);
+      $('#local_pass').val(res.pass);
+      $('#local_prefix').val(res.prefix);
+      $.post('ajax.php',{action:'local_db_connect',host:res.host,name:res.name,user:res.user,pass:res.pass,prefix:res.prefix},function(r){if(r.success){location.reload();}},'json');
+    }
+  },'json');
+});
+$('#local-connect-btn').click(function(){
+  $.post('ajax.php',{
+    action:'local_db_connect',
+    host:$('#local_host').val(),
+    name:$('#local_name').val(),
+    user:$('#local_user').val(),
+    pass:$('#local_pass').val(),
+    prefix:$('#local_prefix').val()
+  },function(res){
+    if(res.success){ location.reload(); }else{ Swal.fire('خطا',res.message,'error'); }
+  },'json');
+});
+</script>
 <?php else: ?>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark w-100">
   <a class="navbar-brand" href="#"><i class="fa-solid fa-screwdriver-wrench me-2"></i>بخش مدیریت</a>
@@ -164,6 +222,12 @@ $('#connect-btn').click(function(){
   </li>
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#settings" type="button">تنظیمات</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#logs" type="button">لاگ ورود و خروج</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#bulk" type="button">اقدامات دست‌جمعی</button>
   </li>
 </ul>
 <div class="tab-content mt-4">
@@ -247,35 +311,92 @@ $('#connect-btn').click(function(){
    </div>
   </section>
 </div>
-<div class="tab-pane fade p-3" id="settings">
-  <div class="row g-3">
-    <div class="col-md-4">
-      <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#configModal">
-        <div class="card-body">
-          <i class="fa fa-database fa-2x mb-2"></i>
-          <div>تنظیمات پایگاه داده</div>
+  <div class="tab-pane fade p-3" id="settings">
+    <div class="row g-3">
+      <div class="col-md-3">
+        <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#configModal">
+          <div class="card-body">
+            <i class="fa fa-database fa-2x mb-2"></i>
+            <div>تنظیمات پایگاه داده</div>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="col-md-4">
-      <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#promptModal">
-        <div class="card-body">
-          <i class="fa fa-robot fa-2x mb-2"></i>
-          <div>پرامپت هوش مصنوعی</div>
+      <div class="col-md-3">
+        <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#localConfigModal">
+          <div class="card-body">
+            <i class="fa fa-database fa-2x mb-2"></i>
+            <div>پایگاه داده سامانه</div>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="col-md-4">
-      <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#licenseModal">
-        <div class="card-body">
-          <i class="fa fa-key fa-2x mb-2"></i>
-          <div>لایسنس‌ها</div>
+      <div class="col-md-3">
+        <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#promptModal">
+          <div class="card-body">
+            <i class="fa fa-robot fa-2x mb-2"></i>
+            <div>پرامپت هوش مصنوعی</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card section-card text-center" data-bs-toggle="modal" data-bs-target="#licenseModal">
+          <div class="card-body">
+            <i class="fa fa-key fa-2x mb-2"></i>
+            <div>لایسنس‌ها</div>
+          </div>
         </div>
       </div>
     </div>
   </div>
-</div>
-</div>
+  <div class="tab-pane fade p-3" id="logs">
+    <table class="table table-striped text-center" id="logTable">
+      <thead><tr><th>زمان</th><th>عملیات</th><th>آی‌پی</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="tab-pane fade p-3" id="bulk">
+  <div class="card mb-3">
+    <div class="card-header">مدیریت موجودی</div>
+    <div class="card-body">
+      <p class="text-muted small">موجود یا ناموجود کردن همه محصولات. این کار باعث جلوگیری از خرید در زمان تغییر قیمت می‌شود.</p>
+      <button class="btn btn-success me-2" id="bulkStockIn">موجود کردن همه محصولات</button>
+      <button class="btn btn-danger" id="bulkStockOut">ناموجود کردن همه محصولات</button>
+    </div>
+  </div>
+  <div class="card mb-3">
+    <div class="card-header">تغییر قیمت دسته‌جمعی</div>
+    <div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">مقدار</label>
+          <input type="number" id="bulkPriceVal" class="form-control">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">نوع</label>
+          <select id="bulkPriceType" class="form-select">
+            <option value="percent">درصد</option>
+            <option value="fixed">عدد ثابت</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <button class="btn btn-success me-2" id="bulkPriceInc">افزایش قیمت</button>
+          <button class="btn btn-danger" id="bulkPriceDec">کاهش قیمت</button>
+        </div>
+      </div>
+    </div>
+  </div>
+    <div class="card mb-3">
+      <div class="card-header">اقدامات دسته‌جمعی سئو</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <button class="btn btn-primary" id="bulkSeoKeywords">کپی نام محصول در Meta Keywords</button>
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-secondary" id="bulkSeoDesc">تولید توضیحات متا</button>
+        </div>
+      </div>
+    </div>
+  </div>
+ </div>
 </div>
 
  <footer class="bg-dark text-light mt-5">
@@ -297,7 +418,7 @@ $('#connect-btn').click(function(){
  </div>
 </footer>
  
- <div class="modal fade" id="configModal" tabindex="-1">
+<div class="modal fade" id="configModal" tabindex="-1">
   <div class="modal-dialog">
    <div class="modal-content">
     <div class="modal-header">
@@ -327,15 +448,51 @@ $('#connect-btn').click(function(){
       <input type="text" id="cfg_prefix" class="form-control">
      </div>
     </div>
-    <div class="modal-footer justify-content-between">
-     <button id="cfgReadWp" class="btn btn-secondary" type="button">خواندن از wp-config.php</button>
+    <div class="modal-footer">
      <button id="cfgSave" class="btn btn-primary" type="button">ذخیره</button>
     </div>
    </div>
   </div>
- </div>
+</div>
 
- <div class="modal fade" id="promptModal" tabindex="-1">
+<div class="modal fade" id="localConfigModal" tabindex="-1">
+ <div class="modal-dialog">
+  <div class="modal-content">
+   <div class="modal-header">
+    <h5 class="modal-title">تنظیمات پایگاه داده سامانه</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+   </div>
+   <div class="modal-body">
+    <div id="localCfgStatus" class="mb-3 small"></div>
+    <div class="mb-3">
+     <label class="form-label">نام میزبان</label>
+     <input type="text" id="localCfg_host" class="form-control">
+    </div>
+    <div class="mb-3">
+     <label class="form-label">نام پایگاه</label>
+     <input type="text" id="localCfg_name" class="form-control">
+    </div>
+    <div class="mb-3">
+     <label class="form-label">نام کاربری</label>
+     <input type="text" id="localCfg_user" class="form-control">
+    </div>
+    <div class="mb-3">
+     <label class="form-label">رمز عبور</label>
+     <input type="password" id="localCfg_pass" class="form-control">
+    </div>
+    <div class="mb-3">
+     <label class="form-label">پیشوند جداول</label>
+     <input type="text" id="localCfg_prefix" class="form-control">
+    </div>
+   </div>
+   <div class="modal-footer">
+    <button id="localCfgSave" class="btn btn-primary" type="button">ذخیره</button>
+   </div>
+  </div>
+ </div>
+</div>
+
+<div class="modal fade" id="promptModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
    <div class="modal-content">
     <div class="modal-header">
@@ -502,14 +659,6 @@ $('#configModal').on('shown.bs.modal',function(){
   },'json');
 });
 
-$('#cfgReadWp').click(function(){
-  $.post('ajax.php',{action:'read_wp_config'},function(res){
-    if(res.success){
-      $('#cfg_host').val(res.host); $('#cfg_name').val(res.name); $('#cfg_user').val(res.user); $('#cfg_pass').val(res.pass); if(res.prefix){ $('#cfg_prefix').val(res.prefix); }
-    }else{ Swal.fire('خطا',res.message,'error'); }
-  },'json');
-});
-
 $('#cfgSave').click(function(){
   $.post('ajax.php',{
     action:'db_connect',
@@ -520,6 +669,38 @@ $('#cfgSave').click(function(){
     prefix:$('#cfg_prefix').val()
   },function(res){
     if(res.success){ toastr.success('ذخیره شد'); $('#configModal').modal('hide'); location.reload(); }
+    else{ Swal.fire('خطا',res.message,'error'); }
+  },'json');
+});
+
+$('#localConfigModal').on('shown.bs.modal',function(){
+  $('#localCfgStatus').text('');
+  $.post('ajax.php',{action:'local_load_config'},function(res){
+    if(res.success){
+      $('#localCfg_host').val(res.host);
+      $('#localCfg_name').val(res.name);
+      $('#localCfg_user').val(res.user);
+      $('#localCfg_pass').val(res.pass);
+      $('#localCfg_prefix').val(res.prefix);
+    }
+  },'json');
+  $.post('ajax.php',{action:'local_check_config'},function(res){
+    const el=$('#localCfgStatus');
+    if(res.success){ el.text('اتصال برقرار است').removeClass('text-danger').addClass('text-success'); }
+    else { el.text(res.message).removeClass('text-success').addClass('text-danger'); }
+  },'json');
+});
+
+$('#localCfgSave').click(function(){
+  $.post('ajax.php',{
+    action:'local_db_connect',
+    host:$('#localCfg_host').val(),
+    name:$('#localCfg_name').val(),
+    user:$('#localCfg_user').val(),
+    pass:$('#localCfg_pass').val(),
+    prefix:$('#localCfg_prefix').val()
+  },function(res){
+    if(res.success){ toastr.success('ذخیره شد'); $('#localConfigModal').modal('hide'); location.reload(); }
     else{ Swal.fire('خطا',res.message,'error'); }
   },'json');
 });
@@ -739,6 +920,82 @@ setInterval(()=>{
 
 fetch('https://ipapi.co/json/').then(r=>r.json()).then(d=>{
   $('#ipInfo').html(`${d.ip} <img src="https://cdn.jsdelivr.net/npm/flag-icons@6.7.0/flags/4x3/${d.country_code.toLowerCase()}.svg" width="20" class="ms-1">`);
+});
+
+$('#bulkStockIn').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',text:'این کار باعث جلوگیری از خرید در زمان تغییر قیمت می‌شود.',icon:'warning',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_stock',status:'instock'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+});
+
+$('#bulkStockOut').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',text:'این کار باعث جلوگیری از خرید در زمان تغییر قیمت می‌شود.',icon:'warning',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_stock',status:'outofstock'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+});
+
+function bulkPrice(op){
+  const val=$('#bulkPriceVal').val();
+  if(!val){ toastr.error('مقدار را وارد کنید'); return; }
+  Swal.fire({title:'آیا مطمئن هستید؟',icon:'question',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_price',op:op,type:$('#bulkPriceType').val(),value:val},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('قیمت‌ها به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+}
+$('#bulkPriceInc').click(()=>bulkPrice('inc'));
+$('#bulkPriceDec').click(()=>bulkPrice('dec'));
+
+$('#bulkSeoKeywords').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',icon:'question',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_seo_keywords'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('کلمات کلیدی به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+});
+
+$('#bulkSeoDesc').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',icon:'question',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_seo_desc'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('توضیحات متا تولید شد');}else{toastr.error(r.message);}
+      },'json');
+    }
+  });
+});
+
+let logTable;
+$('#dashboardTabs button[data-bs-target="#logs"]').on('shown.bs.tab',function(){
+  if(!logTable){
+    logTable=$('#logTable').DataTable({
+      ajax:{url:'ajax.php',type:'POST',data:{action:'list_logs'},dataSrc:'data'},
+      columns:[{data:'ts'},{data:'action'},{data:'ip'}]
+    });
+  }else{
+    logTable.ajax.reload();
+  }
 });
 
 // Analytics charts with tables
