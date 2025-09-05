@@ -292,11 +292,73 @@ case 'save_product':
      }
   }
   echo json_encode(array('success'=>true));
-  $db->close();
-  break;
- case 'analytics':
+   $db->close();
+   break;
+
+case 'bulk_stock':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
+  $status = ($_POST['status'] ?? '') === 'instock' ? 'instock' : 'outofstock';
+  $db->query("UPDATE {$prefix}postmeta SET meta_value='$status' WHERE meta_key='_stock_status'");
+  $db->query("INSERT INTO {$prefix}postmeta (post_id,meta_key,meta_value) SELECT ID,'_stock_status','$status' FROM {$prefix}posts p WHERE p.post_type='product' AND NOT EXISTS (SELECT 1 FROM {$prefix}postmeta pm WHERE pm.post_id=p.ID AND pm.meta_key='_stock_status')");
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+case 'bulk_price':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $op = ($_POST['op'] ?? '') === 'dec' ? '-' : '+';
+  $type = ($_POST['type'] ?? '') === 'fixed' ? 'fixed' : 'percent';
+  $val = isset($_POST['value']) ? floatval($_POST['value']) : 0;
+  if($val==0){ echo json_encode(array('success'=>false,'message'=>'مقدار نامعتبر')); $db->close(); break; }
+  if($type==='percent'){
+    $factor = $op==='+' ? (1 + $val/100) : (1 - $val/100);
+    $db->query("UPDATE {$prefix}postmeta SET meta_value=ROUND(CAST(meta_value AS DECIMAL(10,2))*$factor,2) WHERE meta_key IN ('_price','_regular_price')");
+  }else{
+    $sign = $op==='+' ? '+' : '-';
+    $db->query("UPDATE {$prefix}postmeta SET meta_value=ROUND(CAST(meta_value AS DECIMAL(10,2)) $sign $val,2) WHERE meta_key IN ('_price','_regular_price')");
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+case 'bulk_seo_keywords':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $products = $db->query("SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product'");
+  if($products){
+    while($p=$products->fetch_assoc()){
+      $id=intval($p['ID']);
+      $title=$db->real_escape_string($p['post_title']);
+      $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_metakeywords'");
+      $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metakeywords','$title')");
+    }
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+case 'bulk_seo_desc':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $products = $db->query("SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product'");
+  if($products){
+    while($p=$products->fetch_assoc()){
+      $id=intval($p['ID']);
+      $title=$db->real_escape_string($p['post_title']);
+      $desc=$db->real_escape_string("خرید $title با بهترین قیمت از فروشگاه ما.");
+      $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_metadesc'");
+      $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metadesc','$desc')");
+    }
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+  case 'analytics':
+   $db = connect(); if(!$db) break;
+   $prefix = $_SESSION['db']['prefix'];
   $catRes = $db->query("SELECT COALESCE(pt.name,t.name) name,COUNT(tr.object_id) c FROM {$prefix}terms t JOIN {$prefix}term_taxonomy tt ON t.term_id=tt.term_id LEFT JOIN {$prefix}term_taxonomy ptt ON tt.parent=ptt.term_taxonomy_id LEFT JOIN {$prefix}terms pt ON ptt.term_id=pt.term_id JOIN {$prefix}term_relationships tr ON tr.term_taxonomy_id=tt.term_taxonomy_id WHERE tt.taxonomy='product_cat' GROUP BY name");
   $cat = array('labels'=>array(),'data'=>array());
   if($catRes){ while($r=$catRes->fetch_assoc()){ $cat['labels'][]=$r['name']; $cat['data'][]=$r['c']; }}
