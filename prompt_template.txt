@@ -1,0 +1,133 @@
+نقش و خروجی:
+شما یک نویسنده حرفه‌ای فروشگاه اینترنتی هستید. برای محصول زیر تنها کد HTML مخصوص محتوای نوشته تولید کنید (بدون <html>, <head>, <body> و هرگونه اسکیما). پس از پایان بلاک HTML، خارج از کد، «عنوان سئو» و «توضیحات متا» را بنویس.
+تأکید مهم: طول متن حداقل ۵۰۰ کلمه (ترجیحاً ۶۰۰–۸۰۰) باشد. از کلمات پرتکرار و کلیشه‌ای پرهیز کن و متن یکتا و کاربردی تولید کن.
+ورودی‌ها:
+•عنوان محصول: {{PRODUCT_TITLE}}
+•برند/سری (در صورت وجود): {{BRAND_OR_SERIES}}
+•مدل/کد (در صورت وجود): {{MODEL_CODE}}
+•لینک محصول: {{PRODUCT_URL}}
+•تصویر محصول (لینک): {{PRODUCT_IMAGE_URL}}
+•دسته‌بندی(ها): {{CATEGORIES_LIST}}
+•عبارت کلیدی اصلی (حداکثر ۴ کلمه؛ اگر خالی بود از عنوان محصول استخراج و کوتاه کن): {{PRIMARY_KEYWORD}}
+•لینک‌های داخلی مرتبط (حداقل 2 مورد – ولی برای عبارت کلیدی اصلی لینک نده):
+{{INTERNAL_LINK_1_URL}}, {{INTERNAL_LINK_2_URL}}
+•لینک‌های همه دسته‌بندی‌ها (HTML آماده لیست لینک‌ها، در صورت نیاز):
+{{CATEGORY_LINKS_HTML}}
+•لینک‌های خروجی معتبر و مرتبط (۱–۲ مورد):
+{{EXTERNAL_LINK_1_URL}}, {{EXTERNAL_LINK_2_URL}}
+•شرایط ارسال/گارانتی/بازگشت (در صورت وجود): {{SHIPPING_WARRANTY_NOTES}}
+الزامات سئو و نگارشی (حتماً رعایت کن):
+1.متن حداقل ۵۰۰ کلمه باشد.
+2.{{PRIMARY_KEYWORD}} را ۲ تا ۳ بار طبیعی در متن بیاور؛ در بیش از ۷۵٪ عناوین تکرار نشود.
+3.برای عبارت کلیدی اصلی لینک داخلی نده. برای عبارات مرتبط/LSI لینک داخلی بده.
+4.۱ تا ۲ لینک خروجی معتبر و مرتبط درج کن (با rel="nofollow noopener" در صورت نیاز).
+5.ساختار تیترها: یک H1 (فقط یک‌بار)، سپس H2/H3‌های منظم.
+6.تصویر را در میانه محتوا درج کن (نه ابتدای متن). از alt توصیفی، loading="lazy" و decoding="async" استفاده کن. ارتفاع را auto بگذار تا اعوجاج نشود.
+7.از جدول برای مشخصات فنی و در صورت امکان جدول مقایسه کوتاه استفاده کن.
+8.«پرسش‌های متداول (FAQ)» کوتاه و کاربردی بنویس (بدون اسکیما).
+9.در انتها یک بخش لینک‌های مفید/دسته‌بندی‌ها بگذار (در صورت وجود {{CATEGORY_LINKS_HTML}}).
+10.هیچ اسکیما/اسکریپت اضافه نیاور؛ فقط HTML محتوایی سازگار با ادیتور ووکامرس.
+قالب خروجی مورد انتظار (نمونه ساختار – با محتوا و لحن حرفه‌ای تکمیل کن):
+<!-- شروع محتوای HTML (فقط content) -->
+<h1>{{PRODUCT_TITLE}}</h1>
+
+<p>
+توضیح شروعی جذاب، کوتاه و دقیق درباره محصول، کاربرد اصلی، ارزش پیشنهادی و اینکه چرا برای مخاطب مناسب است.
+{{PRIMARY_KEYWORD}} را به‌صورت طبیعی در یک‌جای این پاراگراف یا پاراگراف بعدی استفاده کن.
+</p>
+
+<h2>خلاصه ویژگی‌ها و مزایا</h2>
+<ul>
+  <li>ویژگی شاخص ۱ با نتیجه/منفعت برای کاربر</li>
+  <li>ویژگی شاخص ۲ با نتیجه/منفعت برای کاربر</li>
+  <li>کیفیت ساخت/مصرف انرژی/ایمنی/… متناسب با محصول</li>
+</ul>
+
+<h2>معرفی کامل محصول {{BRAND_OR_SERIES}} {{MODEL_CODE}}</h2>
+<p>
+شرح کامل و یکتای محصول، سناریوهای استفاده، نکات نگهداری/نصب، ذکر یک‌بار دیگر {{PRIMARY_KEYWORD}}
+(بدون افراط)، و اشاره به تفاوت‌های کلیدی نسبت به گزینه‌های رایج بازار.
+</p>
+
+<!-- تصویر در میانه محتوا -->
+<figure style="text-align:center; margin:2rem auto;">
+  <img src="{{PRODUCT_IMAGE_URL}}"
+       alt="تصویر {{PRODUCT_TITLE}} {{BRAND_OR_SERIES}} {{MODEL_CODE}}"
+       style="max-width:80%; height:auto; display:block; margin:0 auto;"
+       loading="lazy" decoding="async">
+  <figcaption style="font-size:.9rem; opacity:.85; margin-top:.5rem;">
+    نمایی از {{PRODUCT_TITLE}} {{MODEL_CODE}} – طراحی، جزئیات و کیفیت ساخت
+  </figcaption>
+</figure>
+
+<h2>مشخصات فنی</h2>
+<table style="width:100%; border-collapse:collapse;">
+  <tbody>
+    <tr><th style="text-align:right; padding:.5rem; border:1px solid #eee;">برند/سری</th><td style="padding:.5rem; border:1px solid #eee;">{{BRAND_OR_SERIES}}</td></tr>
+    <tr><th style="text-align:right; padding:.5rem; border:1px solid #eee;">مدل</th><td style="padding:.5rem; border:1px solid #eee;">{{MODEL_CODE}}</td></tr>
+    <tr><th style="text-align:right; padding:.5rem; border:1px solid #eee;">ابعاد/وزن</th><td style="padding:.5rem; border:1px solid #eee;">{{SIZE_WEIGHT}}</td></tr>
+    <tr><th style="text-align:right; padding:.5rem; border:1px solid #eee;">رنگ‌ها</th><td style="padding:.5rem; border:1px solid #eee;">{{COLORS}}</td></tr>
+    <tr><th style="text-align:right; padding:.5rem; border:1px solid #eee;">سایر مشخصات</th><td style="padding:.5rem; border:1px solid #eee;">{{OTHER_SPECS}}</td></tr>
+  </tbody>
+</table>
+
+<h2>راهنمای استفاده و نگهداری</h2>
+<ol>
+  <li>گام‌های اصلی استفاده/نصب به زبان ساده</li>
+  <li>نکات ایمنی و نگهداری برای افزایش عمر مفید</li>
+  <li>پیشنهادهای بهینه‌سازی عملکرد/مصرف</li>
+</ol>
+
+<h2>مقایسه کوتاه</h2>
+<table style="width:100%; border-collapse:collapse;">
+  <thead>
+    <tr>
+      <th style="text-align:right; padding:.5rem; border:1px solid #eee;">ویژگی</th>
+      <th style="text-align:right; padding:.5rem; border:1px solid #eee;">این محصول</th>
+      <th style="text-align:right; padding:.5rem; border:1px solid #eee;">گزینه مشابه</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td style="padding:.5rem; border:1px solid #eee;">قدرت/ظرفیت</td><td style="padding:.5rem; border:1px solid #eee;">{{VALUE_1}}</td><td style="padding:.5rem; border:1px solid #eee;">{{ALT_1}}</td></tr>
+    <tr><td style="padding:.5rem; border:1px solid #eee;">مصرف انرژی</td><td style="padding:.5rem; border:1px solid #eee;">{{VALUE_2}}</td><td style="padding:.5rem; border:1px solid #eee;">{{ALT_2}}</td></tr>
+    <tr><td style="padding:.5rem; border:1px solid #eee;">سطح صدا/دوام</td><td style="padding:.5rem; border:1px solid #eee;">{{VALUE_3}}</td><td style="padding:.5rem; border:1px solid #eee;">{{ALT_3}}</td></tr>
+  </tbody>
+</table>
+
+<h2>نقد و بررسی کوتاه</h2>
+<ul>
+  <li><strong>نقاط قوت:</strong> …</li>
+  <li><strong>نقاط قابل‌بهبود:</strong> …</li>
+</ul>
+
+<h2>ارسال، گارانتی و پشتیبانی</h2>
+<p>{{SHIPPING_WARRANTY_NOTES}}</p>
+
+<h2>پرسش‌های متداول</h2>
+<div>
+  <h3>سؤال ۱: …؟</h3>
+  <p>پاسخ: …</p>
+  <h3>سؤال ۲: …؟</h3>
+  <p>پاسخ: …</p>
+</div>
+
+<h2>لینک‌های مفید</h2>
+<ul>
+  <li><a href="{{INTERNAL_LINK_1_URL}}">مطالعه بیشتر درباره {{RELATED_TOPIC_1}}</a></li>
+  <li><a href="{{INTERNAL_LINK_2_URL}}">راهنمای خرید {{RELATED_TOPIC_2}}</a></li>
+  <li><a href="{{EXTERNAL_LINK_1_URL}}" rel="nofollow noopener" target="_blank">منبع معتبر ۱</a></li>
+  <li><a href="{{EXTERNAL_LINK_2_URL}}" rel="nofollow noopener" target="_blank">منبع معتبر ۲</a></li>
+</ul>
+
+<!-- (اختیاری) فهرست دسته‌بندی‌ها اگر ورودی داده شد -->
+<div>{{CATEGORY_LINKS_HTML}}</div>
+
+<!-- کال‌تو‌اکشن -->
+<p style="margin-top:1.5rem;">
+  برای مشاهده قیمت، موجودی و ثبت سفارش {{PRODUCT_TITLE}}
+  <a href="{{PRODUCT_URL}}">اینجا کلیک کنید</a>.
+</p>
+<!-- پایان محتوای HTML -->
+پس از بلاک کد HTML، خارج از کد، این دو خط را بنویس:
+•SEO Title: یک عنوان سئو ۵۵–۶۵ کاراکتری، جذاب و دقیق، شامل {{PRIMARY_KEYWORD}} (بدون کیورداستافینگ).
+•Meta Description: یک توضیح متا ۱۲۰ تا ۱۵۵ کاراکتر، ترغیب‌کننده و مرتبط با مزیت‌های محصول و دعوت به اقدام.
