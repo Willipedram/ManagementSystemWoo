@@ -165,6 +165,9 @@ $('#connect-btn').click(function(){
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#settings" type="button">تنظیمات</button>
   </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#bulk" type="button">اقدامات دست‌جمعی</button>
+  </li>
 </ul>
 <div class="tab-content mt-4">
 <div class="tab-pane fade show active p-3" id="products">
@@ -274,8 +277,51 @@ $('#connect-btn').click(function(){
       </div>
     </div>
   </div>
+  </div>
 </div>
 </div>
+<div class="tab-pane fade p-3" id="bulk">
+  <div class="card mb-3">
+    <div class="card-header">مدیریت موجودی</div>
+    <div class="card-body">
+      <p class="text-muted small">موجود یا ناموجود کردن همه محصولات. این کار باعث جلوگیری از خرید در زمان تغییر قیمت می‌شود.</p>
+      <button class="btn btn-success me-2" id="bulkStockIn">موجود کردن همه محصولات</button>
+      <button class="btn btn-danger" id="bulkStockOut">ناموجود کردن همه محصولات</button>
+    </div>
+  </div>
+  <div class="card mb-3">
+    <div class="card-header">تغییر قیمت دسته‌جمعی</div>
+    <div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">مقدار</label>
+          <input type="number" id="bulkPriceVal" class="form-control">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">نوع</label>
+          <select id="bulkPriceType" class="form-select">
+            <option value="percent">درصد</option>
+            <option value="fixed">عدد ثابت</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <button class="btn btn-success me-2" id="bulkPriceInc">افزایش قیمت</button>
+          <button class="btn btn-danger" id="bulkPriceDec">کاهش قیمت</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card mb-3">
+    <div class="card-header">اقدامات دسته‌جمعی سئو</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <button class="btn btn-primary" id="bulkSeoKeywords">کپی نام محصول در Meta Keywords</button>
+      </div>
+      <div class="mb-3">
+        <button class="btn btn-secondary" id="bulkSeoDesc">تولید توضیحات متا</button>
+      </div>
+    </div>
+  </div>
 </div>
 
  <footer class="bg-dark text-light mt-5">
@@ -739,6 +785,70 @@ setInterval(()=>{
 
 fetch('https://ipapi.co/json/').then(r=>r.json()).then(d=>{
   $('#ipInfo').html(`${d.ip} <img src="https://cdn.jsdelivr.net/npm/flag-icons@6.7.0/flags/4x3/${d.country_code.toLowerCase()}.svg" width="20" class="ms-1">`);
+});
+
+$('#bulkStockIn').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',text:'این کار باعث جلوگیری از خرید در زمان تغییر قیمت می‌شود.',icon:'warning',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_stock',status:'instock'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+});
+
+$('#bulkStockOut').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',text:'این کار باعث جلوگیری از خرید در زمان تغییر قیمت می‌شود.',icon:'warning',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_stock',status:'outofstock'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+});
+
+function bulkPrice(op){
+  const val=$('#bulkPriceVal').val();
+  if(!val){ toastr.error('مقدار را وارد کنید'); return; }
+  Swal.fire({title:'آیا مطمئن هستید؟',icon:'question',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_price',op:op,type:$('#bulkPriceType').val(),value:val},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('قیمت‌ها به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+}
+$('#bulkPriceInc').click(()=>bulkPrice('inc'));
+$('#bulkPriceDec').click(()=>bulkPrice('dec'));
+
+$('#bulkSeoKeywords').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',icon:'question',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_seo_keywords'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('کلمات کلیدی به‌روزرسانی شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
+});
+
+$('#bulkSeoDesc').click(function(){
+  Swal.fire({title:'آیا مطمئن هستید؟',icon:'question',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
+    if(res.isConfirmed){
+      NProgress.start();
+      $.post('ajax.php',{action:'bulk_seo_desc'},function(r){
+        NProgress.done();
+        if(r.success){toastr.success('توضیحات متا تولید شد');}else{toastr.error(r.message);} 
+      },'json');
+    }
+  });
 });
 
 // Analytics charts with tables
