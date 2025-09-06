@@ -19,31 +19,18 @@ case 'login':
   if($token === $AUTH_TOKEN){
     $_SESSION['auth'] = true;
     $_SESSION['token'] = $token;
+    log_event('login');
     echo json_encode(array('success'=>true));
   } else {
     echo json_encode(array('success'=>false,'message'=>'توکن نامعتبر است'));
   }
   break;
- case 'logout':
+case 'logout':
+  log_event('logout');
   session_destroy();
   echo json_encode(array('success'=>true));
   break;
-case 'read_wp_config':
-  $config_path = dirname(__DIR__).'/wp-config.php';
-  if(file_exists($config_path)){
-    $config = file_get_contents($config_path);
-    preg_match("/define\(\s*'DB_NAME',\s*'([^']+)'\s*\)/", $config, $m); $name = isset($m[1]) ? $m[1] : '';
-    preg_match("/define\(\s*'DB_USER',\s*'([^']+)'\s*\)/", $config, $m); $user = isset($m[1]) ? $m[1] : '';
-    preg_match("/define\(\s*'DB_PASSWORD',\s*'([^']+)'\s*\)/", $config, $m); $pass = isset($m[1]) ? $m[1] : '';
-    preg_match("/define\(\s*'DB_HOST',\s*'([^']+)'\s*\)/", $config, $m); $host = isset($m[1]) ? $m[1] : 'localhost';
-    preg_match("/\$table_prefix\s*=\s*'([^']+)'/", $config, $m); $prefix = isset($m[1]) ? $m[1] : 'wp_';
-    secure_save_config(compact('host','name','user','pass','prefix'));
-    echo json_encode(array('success'=>true,'name'=>$name,'user'=>$user,'pass'=>$pass,'host'=>$host,'prefix'=>$prefix));
-  } else {
-    echo json_encode(array('success'=>false,'message'=>'فایل wp-config.php پیدا نشد'));
-  }
-  break;
- case 'db_connect':
+case 'db_connect':
   $host = isset($_POST['host']) ? $_POST['host'] : '';
   $name = isset($_POST['name']) ? $_POST['name'] : '';
   $user = isset($_POST['user']) ? $_POST['user'] : '';
@@ -97,6 +84,45 @@ case 'save_licenses':
   $licenses=isset($_POST['licenses'])?json_decode($_POST['licenses'],true):array();
   if(file_put_contents($path,json_encode($licenses,JSON_UNESCAPED_UNICODE))!==false){ echo json_encode(array('success'=>true)); }
   else{ echo json_encode(array('success'=>false,'message'=>'ذخیره نشد')); }
+  break;
+case 'local_db_connect':
+  $host = isset($_POST['host']) ? $_POST['host'] : '';
+  $name = isset($_POST['name']) ? $_POST['name'] : '';
+  $user = isset($_POST['user']) ? $_POST['user'] : '';
+  $pass = isset($_POST['pass']) ? $_POST['pass'] : '';
+  $prefix = isset($_POST['prefix']) ? $_POST['prefix'] : 'msw_';
+  try{ $mysqli = new mysqli($host,$user,$pass,$name); }
+  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
+  if($mysqli->connect_errno){ echo json_encode(array('success'=>false,'message'=>$mysqli->connect_error)); break; }
+  $mysqli->set_charset('utf8mb4');
+  $_SESSION['logdb']=array('host'=>$host,'name'=>$name,'user'=>$user,'pass'=>$pass,'prefix'=>$prefix);
+  secure_save_local_config($_SESSION['logdb']);
+  $mysqli->query("CREATE TABLE IF NOT EXISTS {$prefix}logs (id INT AUTO_INCREMENT PRIMARY KEY, action VARCHAR(20), ip VARCHAR(45), ts DATETIME)");
+  $mysqli->close();
+  echo json_encode(array('success'=>true));
+  break;
+case 'local_load_config':
+  $cfg = secure_load_local_config();
+  if($cfg){ echo json_encode(array('success'=>true,'host'=>$cfg['host'],'name'=>$cfg['name'],'user'=>$cfg['user'],'pass'=>$cfg['pass'],'prefix'=>$cfg['prefix'])); }
+  else{ echo json_encode(array('success'=>false)); }
+  break;
+case 'local_check_config':
+  $cfg = secure_load_local_config();
+  if(!$cfg){ echo json_encode(array('success'=>false,'message'=>'تنظیمات موجود نیست')); break; }
+  try{ $mysqli = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
+  if($mysqli->connect_errno){ echo json_encode(array('success'=>false,'message'=>$mysqli->connect_error)); }
+  else { $mysqli->close(); echo json_encode(array('success'=>true)); }
+  break;
+case 'list_logs':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $res = $db->query("SELECT action, ip, ts FROM {$prefix}logs ORDER BY id DESC LIMIT 100");
+  $rows = array();
+  if($res){ while($row=$res->fetch_assoc()){ $rows[]=$row; } }
+  $db->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
   break;
 case 'list_products':
   $db = connect(); if(!$db) break;
@@ -249,6 +275,7 @@ case 'save_product':
   $id = intval($_POST['id']);
   $name = $db->real_escape_string($_POST['name']);
   $slug = $db->real_escape_string($_POST['slug']);
+  $old_slug = isset($_POST['old_slug']) ? $db->real_escape_string($_POST['old_slug']) : '';
   $desc = $db->real_escape_string($_POST['description']);
   $price = $db->real_escape_string($_POST['price']);
   $stock = $db->real_escape_string($_POST['stock_status']);
@@ -291,12 +318,95 @@ case 'save_product':
        }
      }
   }
+  $redirect_success = false;
+  if($old_slug && $old_slug !== $slug){
+    $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
+    if($check && $check->num_rows){
+      $oldPath = '/product/'.$old_slug.'/';
+      $newPath = '/product/'.$slug.'/';
+      if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
+        $redirect_success = true;
+      }
+    }
+  }
+  echo json_encode(array('success'=>true,'redirect'=>$redirect_success));
+  $db->close();
+  break;
+
+case 'bulk_stock':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $status = ($_POST['status'] ?? '') === 'instock' ? 'instock' : 'outofstock';
+  $db->query("UPDATE {$prefix}postmeta SET meta_value='$status' WHERE meta_key='_stock_status'");
+  $db->query("INSERT INTO {$prefix}postmeta (post_id,meta_key,meta_value) SELECT ID,'_stock_status','$status' FROM {$prefix}posts p WHERE p.post_type='product' AND NOT EXISTS (SELECT 1 FROM {$prefix}postmeta pm WHERE pm.post_id=p.ID AND pm.meta_key='_stock_status')");
   echo json_encode(array('success'=>true));
   $db->close();
   break;
- case 'analytics':
+
+case 'bulk_price':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
+  $op = ($_POST['op'] ?? '') === 'dec' ? '-' : '+';
+  $type = ($_POST['type'] ?? '') === 'fixed' ? 'fixed' : 'percent';
+  $val = isset($_POST['value']) ? floatval($_POST['value']) : 0;
+  if($val==0){ echo json_encode(array('success'=>false,'message'=>'مقدار نامعتبر')); $db->close(); break; }
+  if($type==='percent'){
+    $factor = $op==='+' ? (1 + $val/100) : (1 - $val/100);
+    $db->query("UPDATE {$prefix}postmeta SET meta_value=ROUND(CAST(meta_value AS DECIMAL(10,2))*$factor,2) WHERE meta_key IN ('_price','_regular_price')");
+  }else{
+    $sign = $op==='+' ? '+' : '-';
+    $db->query("UPDATE {$prefix}postmeta SET meta_value=ROUND(CAST(meta_value AS DECIMAL(10,2)) $sign $val,2) WHERE meta_key IN ('_price','_regular_price')");
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+case 'bulk_seo_keywords':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $hasIndexTable = $db->query("SHOW TABLES LIKE '{$prefix}yoast_indexable'");
+  $updateIndex = $hasIndexTable && $hasIndexTable->num_rows > 0;
+  $products = $db->query("SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product'");
+  if($products){
+    while($p=$products->fetch_assoc()){
+      $id = intval($p['ID']);
+      $title = $db->real_escape_string($p['post_title']);
+      $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_metakeywords','_yoast_wpseo_focuskw')");
+      $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metakeywords','$title'),($id,'_yoast_wpseo_focuskw','$title')");
+      if($updateIndex){
+        $db->query("UPDATE {$prefix}yoast_indexable SET primary_focus_keyword='$title', meta_keywords='$title' WHERE object_id=$id AND object_type='post'");
+      }
+    }
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+case 'bulk_seo_desc':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $hasIndexTable = $db->query("SHOW TABLES LIKE '{$prefix}yoast_indexable'");
+  $updateIndex = $hasIndexTable && $hasIndexTable->num_rows > 0;
+  $products = $db->query("SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product'");
+  if($products){
+    while($p=$products->fetch_assoc()){
+      $id = intval($p['ID']);
+      $title = $db->real_escape_string($p['post_title']);
+      $desc  = $db->real_escape_string("خرید $title با بهترین قیمت از فروشگاه ما.");
+      $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_metadesc'");
+      $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metadesc','$desc')");
+      if($updateIndex){
+        $db->query("UPDATE {$prefix}yoast_indexable SET description='$desc' WHERE object_id=$id AND object_type='post'");
+      }
+    }
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+  case 'analytics':
+   $db = connect(); if(!$db) break;
+   $prefix = $_SESSION['db']['prefix'];
   $catRes = $db->query("SELECT COALESCE(pt.name,t.name) name,COUNT(tr.object_id) c FROM {$prefix}terms t JOIN {$prefix}term_taxonomy tt ON t.term_id=tt.term_id LEFT JOIN {$prefix}term_taxonomy ptt ON tt.parent=ptt.term_taxonomy_id LEFT JOIN {$prefix}terms pt ON ptt.term_id=pt.term_id JOIN {$prefix}term_relationships tr ON tr.term_taxonomy_id=tt.term_taxonomy_id WHERE tt.taxonomy='product_cat' GROUP BY name");
   $cat = array('labels'=>array(),'data'=>array());
   if($catRes){ while($r=$catRes->fetch_assoc()){ $cat['labels'][]=$r['name']; $cat['data'][]=$r['c']; }}
@@ -376,6 +486,52 @@ function secure_load_config(){
   $key = hash('sha256', $_SESSION['token'], true);
   $json = openssl_decrypt($enc, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
   return $json ? json_decode($json,true) : false;
+}
+
+function connect_local(){
+  if(!isset($_SESSION['logdb'])) return false;
+  $cfg = $_SESSION['logdb'];
+  try{ $mysqli = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+  catch(mysqli_sql_exception $e){ return false; }
+  if($mysqli->connect_errno) return false;
+  $mysqli->set_charset('utf8mb4');
+  $mysqli->query("CREATE TABLE IF NOT EXISTS {$cfg['prefix']}logs (id INT AUTO_INCREMENT PRIMARY KEY, action VARCHAR(20), ip VARCHAR(45), ts DATETIME)");
+  return $mysqli;
+}
+
+function secure_save_local_config($data){
+  if(!isset($_SESSION['token'])) return;
+  $key = hash('sha256', $_SESSION['token'], true);
+  $iv = random_bytes(16);
+  $json = json_encode($data);
+  $enc = openssl_encrypt($json, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+  file_put_contents(__DIR__.'/local_config.secure', base64_encode($iv.$enc));
+}
+
+function secure_load_local_config(){
+  if(!isset($_SESSION['token'])) return false;
+  $path = __DIR__.'/local_config.secure';
+  if(!file_exists($path)) return false;
+  $raw = base64_decode(file_get_contents($path));
+  $iv = substr($raw,0,16);
+  $enc = substr($raw,16);
+  $key = hash('sha256', $_SESSION['token'], true);
+  $json = openssl_decrypt($enc, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+  return $json ? json_decode($json,true) : false;
+}
+
+function log_event($action){
+  $db = connect_local();
+  if(!$db) return;
+  $prefix = $_SESSION['logdb']['prefix'];
+  $ip = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+  $stmt = $db->prepare("INSERT INTO {$prefix}logs(action, ip, ts) VALUES (?,?,NOW())");
+  if($stmt){
+    $stmt->bind_param('ss',$action,$ip);
+    $stmt->execute();
+    $stmt->close();
+  }
+  $db->close();
 }
 
 function compute_seo_score($title,$meta,$content,$keyword){
