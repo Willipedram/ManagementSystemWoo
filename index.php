@@ -19,14 +19,12 @@ $canViewLogs = in_array('view_logs',$permissions);
 <link href="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn&display=swap" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@29.3.4/styles/ag-grid.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@29.3.4/styles/ag-theme-alpine.css">
-<link rel="stylesheet" href="https://unpkg.com/gridjs/dist/theme/mermaid.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css"/>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@29.3.4/dist/ag-grid-community.min.js"></script>
-<script src="https://unpkg.com/gridjs/dist/gridjs.umd.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -88,7 +86,7 @@ footer{font-size:.9rem;}
   </div>
 </div>
 </div>
-<script>
+<script type="text/babel">
 $(function(){
   $('#setup-next1').click(function(){
     $.post('ajax.php',{action:'db_connect',host:$('#db_host').val(),name:$('#db_name').val(),user:$('#db_user').val(),pass:$('#db_pass').val(),prefix:$('#db_prefix').val()},function(r){
@@ -338,7 +336,7 @@ $('#local-connect-btn').click(function(){
 </ul>
 <div class="tab-content mt-4">
 <div class="tab-pane fade show active p-3" id="products">
-<div id="productsGrid" class="ag-theme-alpine" style="height:400px;"></div>
+<div id="productsTable" style="height:calc(100vh - 200px);"></div>
 </div>
 <div class="tab-pane fade p-3" id="analytics">
   <section class="mb-5">
@@ -746,7 +744,7 @@ $('#local-connect-btn').click(function(){
    </div>
    <div class="modal-body">
     <canvas id="logChart" class="mb-3" style="max-height:300px"></canvas>
-    <div id="userLogTable" class="text-end" style="direction:ltr;"></div>
+    <div id="userLogTable"></div>
    </div>
   </div>
  </div>
@@ -1103,27 +1101,114 @@ $('#copyLog').click(()=>{ navigator.clipboard.writeText($('#logPanel').text()); 
 $(document).ajaxStart(()=>NProgress.start());
 $(document).ajaxStop(()=>NProgress.done());
 
-const columnDefs=[
- {headerName:'تصویر',field:'image',width:80,cellRenderer:params=>`<img src="${params.value}" width="50" height="50">`},
- {headerName:'نام',field:'name',flex:1},
- {headerName:'قیمت',field:'price',width:120},
- {headerName:'انبارداری',field:'stock',width:120},
- {headerName:'سئو',field:'seo',width:90},
- {headerName:'ویرایش',field:'id',width:90,cellRenderer:params=>`<button class="btn btn-sm btn-primary edit" data-id="${params.value}">ویرایش</button>`},
- {headerName:'نمایش',field:'link',width:90,cellRenderer:params=>`<a class="btn btn-sm btn-outline-secondary" target="_blank" href="${params.value}">نمایش</a>`}
-];
-const gridOptions={columnDefs:columnDefs,rowData:[],defaultColDef:{resizable:true}};
-const gridDiv=document.querySelector('#productsGrid');
-new agGrid.Grid(gridDiv,gridOptions);
-function loadProducts(){
- fetch('ajax.php',{
-   method:'POST',
-   headers:{"Content-Type":"application/x-www-form-urlencoded"},
-   body:'action=list_products',
-   credentials:'same-origin'
- }).then(r=>r.json()).then(r=>{ if(r.success){ gridOptions.api.setRowData(r.data); }});
+function ProductsTable(){
+ const [rows,setRows]=React.useState([]);
+ const load=React.useCallback(()=>{
+  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=list_products'})
+   .then(r=>r.json()).then(r=>{ if(r.success) setRows(r.data); });
+ },[]);
+ React.useEffect(()=>{ load(); },[load]);
+ window.loadProducts=load;
+ const seoClass=s=>{ if(s>=80) return 'bg-success text-white'; if(s>=50) return 'bg-warning'; if(s>0) return 'bg-danger text-white'; return 'bg-secondary text-white'; };
+ return (
+  <div style={{height:'100%',overflowY:'auto'}}>
+   <table className="table table-striped" style={{direction:'rtl'}}>
+    <thead><tr><th>تصویر</th><th>نام</th><th>قیمت</th><th>انبارداری</th><th>سئو</th><th>ویرایش</th><th>نمایش</th></tr></thead>
+    <tbody>
+     {rows.map(p=> (
+      <tr key={p.id}>
+       <td><img src={p.image} width="50" height="50"/></td>
+       <td>{p.name}</td>
+       <td>{p.price}</td>
+       <td className={p.stock==='موجود'?'bg-success text-white':'bg-danger text-white'}>{p.stock}</td>
+       <td className={seoClass(p.seo)}>{p.seo}</td>
+       <td><button className="btn btn-sm btn-primary edit" data-id={p.id}>ویرایش</button></td>
+       <td><a className="btn btn-sm btn-outline-secondary" target="_blank" href={p.link}>نمایش</a></td>
+      </tr>
+     ))}
+    </tbody>
+   </table>
+  </div>
+ );
 }
-loadProducts();
+ReactDOM.createRoot(document.getElementById('productsTable')).render(<ProductsTable/>);
+
+function UsersTable(){
+ const [rows,setRows]=React.useState([]);
+ const load=React.useCallback(()=>{
+  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=users_list'})
+   .then(r=>r.json()).then(r=>{ if(r.success) setRows(r.data); });
+ },[]);
+ React.useEffect(()=>{ load(); },[load]);
+ window.loadUsers=load;
+ return (
+  <div className="table-responsive" style={{direction:'rtl'}}>
+   <table className="table table-striped">
+    <thead><tr><th>ID</th><th>نام کاربری</th><th>نقش</th><th>وضعیت</th><th>ایجاد</th><th>اقدامات</th></tr></thead>
+    <tbody>
+     {rows.map(u=>(
+      <tr key={u.id}>
+       <td>{u.id}</td>
+       <td>{u.username}</td>
+       <td>{u.role}</td>
+       <td>{u.status}</td>
+       <td>{u.created_at}</td>
+       <td>
+        <button className="btn btn-sm btn-info user-log" data-id={u.id} data-name={u.username}>لاگ</button>{' '}
+        <button className="btn btn-sm btn-primary edit-user" data-id={u.id}>ویرایش</button>{' '}
+        <button className="btn btn-sm btn-danger delete-user" data-id={u.id}>حذف</button>
+       </td>
+      </tr>
+     ))}
+    </tbody>
+   </table>
+  </div>
+ );
+}
+ReactDOM.createRoot(document.getElementById('usersTable')).render(<UsersTable/>);
+
+function LogsTable(){
+ const [rows,setRows]=React.useState([]);
+ const load=React.useCallback(()=>{
+  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=logs_list'})
+   .then(r=>r.json()).then(r=>{ if(r.success) setRows(r.data); });
+ },[]);
+ React.useEffect(()=>{ load(); },[load]);
+ window.loadLogs=load;
+ return (
+  <div className="table-responsive" style={{direction:'rtl'}}>
+   <table className="table table-striped">
+    <thead><tr><th>کاربر</th><th>عملیات</th><th>آی‌پی</th><th>کشور</th><th>شهر</th><th>ISP</th><th>زمان</th></tr></thead>
+    <tbody>
+     {rows.map((l,i)=>(
+      <tr key={i}>
+       <td>{l.user_id}</td><td>{l.action}</td><td>{l.ip_address}</td><td>{l.country}</td><td>{l.city}</td><td>{l.isp}</td><td>{toJalali(l.timestamp)}</td>
+      </tr>
+     ))}
+    </tbody>
+   </table>
+  </div>
+ );
+}
+if(document.getElementById('logsTable')) ReactDOM.createRoot(document.getElementById('logsTable')).render(<LogsTable/>);
+
+function UserLogTable(){
+ const [rows,setRows]=React.useState([]);
+ React.useEffect(()=>{ window.setUserLogData=setRows; },[]);
+ return (
+  <div className="table-responsive" style={{direction:'ltr'}}>
+   <table className="table table-striped text-start">
+    <thead><tr><th>زمان</th><th>عملیات</th><th>آی‌پی</th><th>کشور</th><th>شهر</th><th>ISP</th></tr></thead>
+    <tbody>
+     {rows.map((r,i)=>(
+      <tr key={i}><td>{r.ts}</td><td>{r.action}</td><td>{r.ip}</td><td>{r.country}</td><td>{r.city}</td><td>{r.isp}</td></tr>
+     ))}
+    </tbody>
+   </table>
+  </div>
+ );
+}
+ReactDOM.createRoot(document.getElementById('userLogTable')).render(<UserLogTable/>);
 
 $(document).on('click','.edit',function(){
  var id=$(this).data('id');
@@ -1190,7 +1275,7 @@ $('#saveBtn').click(function(){
             }
             $('#prod_slug').data('old',$('#prod_slug').val());
           }
-          table.ajax.reload(null,false);
+          loadProducts();
           bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
         }else{
           toastr.error(res.message);
@@ -1281,17 +1366,13 @@ function toJalali(d){
   const date=new Date(d.replace(' ','T'));
   return date.toLocaleString('fa-IR-u-ca-persian',{dateStyle:'short',timeStyle:'short'});
 }
-let logTable, logChart;
+let logChart;
 function showUserLogs(id, name){
   $.post('ajax.php',{action:'fetch_user_logs',id:id},function(r){
     if(r.success){
       $('#logUser').text(name);
-      const rows=r.data.map(d=>[toJalali(d.ts),d.action,d.ip,d.country,d.city,d.isp]);
-      if(!logTable){
-        logTable=new gridjs.Grid({columns:['زمان','عملیات','آی‌پی','کشور','شهر','ISP'],data:rows}).render(document.getElementById('userLogTable'));
-      }else{
-        logTable.updateConfig({data:rows}).forceRender();
-      }
+      const rows=r.data.map(d=>({ts:toJalali(d.ts),action:d.action,ip:d.ip,country:d.country,city:d.city,isp:d.isp}));
+      if(window.setUserLogData) window.setUserLogData(rows);
       const labels=Object.keys(r.counts), values=Object.values(r.counts);
       if(logChart) logChart.destroy();
       logChart=new Chart(document.getElementById('logChart'),{
@@ -1397,35 +1478,7 @@ $('button[data-bs-target="#analytics"]').on('shown.bs.tab',function(){
  if(!analyticsLoaded){ loadAnalytics(); analyticsLoaded=true; }
 });
 
-let usersGrid;
-$('#dashboardTabs button[data-bs-target="#users"]').on('shown.bs.tab',function(){
- if(!usersGrid){
-  usersGrid=new gridjs.Grid({
-   columns:['ID','نام کاربری','نقش','وضعیت','ایجاد','اقدامات'],
-   server:{
-     url:'ajax.php',
-     method:'POST',
-     body:{action:'users_list'},
-     then:data=>data.data.map(u=>[u.id,u.username,u.role,u.status,u.created_at,gridjs.html(`<button class="btn btn-sm btn-info user-log" data-id="${u.id}" data-name="${u.username}">لاگ</button> <button class="btn btn-sm btn-primary edit-user" data-id="${u.id}">ویرایش</button> <button class="btn btn-sm btn-danger delete-user" data-id="${u.id}">حذف</button>`)] )
-   },
-   pagination:{limit:10}
-  }).render(document.getElementById('usersTable'));
- } else { usersGrid.updateConfig({}).forceRender(); }
-});
 
-let logsGrid;
-$('#dashboardTabs button[data-bs-target="#logs"]').on('shown.bs.tab',function(){
- if(!logsGrid){
-  logsGrid=new gridjs.Grid({
-   columns:['کاربر','عملیات','آی‌پی','کشور','شهر','ISP','زمان'],
-   server:{
-     url:'ajax.php',method:'POST',body:{action:'logs_list'},
-     then:data=>data.data.map(l=>[l.user_id,l.action,l.ip_address,l.country,l.city,l.isp,toJalali(l.timestamp)])
-   },
-   pagination:{limit:10}
-  }).render(document.getElementById('logsTable'));
- } else { logsGrid.updateConfig({}).forceRender(); }
-});
 
 $('#addUserBtn').click(function(){
  $('#userForm')[0].reset();
@@ -1456,10 +1509,10 @@ $('#usersTable').on('click','.delete-user',function(){
  const id=$(this).data('id');
  Swal.fire({title:'حذف کاربر؟',icon:'warning',showCancelButton:true,confirmButtonText:'بله',cancelButtonText:'خیر'}).then(res=>{
   if(res.isConfirmed){
-   $.post('ajax.php',{action:'user_delete',id:id},function(r){
-    if(r.success){ toastr.success('حذف شد'); usersGrid.updateConfig({}).forceRender(); }
-    else { toastr.error(r.message); }
-   },'json');
+     $.post('ajax.php',{action:'user_delete',id:id},function(r){
+      if(r.success){ toastr.success('حذف شد'); loadUsers(); }
+      else { toastr.error(r.message); }
+     },'json');
   }
  });
 });
@@ -1479,11 +1532,11 @@ $('#userForm').submit(function(e){
   permissions: perms
  };
  $.post('ajax.php',data,function(r){
-  if(r.success){
-   toastr.success('ذخیره شد');
-   $('#userModal').modal('hide');
-   usersGrid.updateConfig({}).forceRender();
-  } else { toastr.error(r.message); }
+    if(r.success){
+     toastr.success('ذخیره شد');
+     $('#userModal').modal('hide');
+     loadUsers();
+    } else { toastr.error(r.message); }
  },'json');
 });
 
