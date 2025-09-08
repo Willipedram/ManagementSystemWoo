@@ -8,6 +8,8 @@ $permissions = isset($_SESSION['permissions']) ? explode(',', $_SESSION['permiss
 $canViewSettings = in_array('all',$permissions) || in_array('view_settings',$permissions);
 $canEditSlug = in_array('all',$permissions) || in_array('edit_slug',$permissions);
 $canViewLogs = in_array('all',$permissions) || in_array('view_logs',$permissions);
+$canViewUsers = in_array('all',$permissions) || in_array('view_users',$permissions);
+$canViewAssignments = in_array('all',$permissions) || in_array('view_assignments',$permissions);
 ?>
 <!doctype html>
 <html lang="fa" dir="rtl">
@@ -331,12 +333,16 @@ $('#local-connect-btn').click(function(){
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#bulk" type="button">اقدامات دست‌جمعی</button>
   </li>
+  <?php if($canViewUsers): ?>
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#users" type="button">کاربران</button>
   </li>
+  <?php endif; ?>
+  <?php if($canViewAssignments): ?>
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#assignments" type="button">تخصیص محصولات</button>
   </li>
+  <?php endif; ?>
   <?php if($canViewLogs): ?>
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#logs" type="button">لاگ ورود و خروج</button>
@@ -729,6 +735,14 @@ $('#local-connect-btn').click(function(){
         <div class="form-check">
           <input class="form-check-input rperm" type="checkbox" value="view_logs" id="rperm_logs">
           <label class="form-check-label" for="rperm_logs">مشاهده لاگ‌ها</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input rperm" type="checkbox" value="view_users" id="rperm_users">
+          <label class="form-check-label" for="rperm_users">مشاهده تب کاربران</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input rperm" type="checkbox" value="view_assignments" id="rperm_assign">
+          <label class="form-check-label" for="rperm_assign">مشاهده تب تخصیص محصولات</label>
         </div>
       </div>
       <button type="submit" class="btn btn-primary">ذخیره نقش</button>
@@ -1498,6 +1512,7 @@ function loadLogs(){
   });
 }
 function initSearchConsole(){
+  log('SearchConsole: init');
   searchConsoleGrid=new gridjs.Grid({
     columns:['کوئری','کلیک','ایمپرشن','CTR','رتبه'],
     data:[],
@@ -1510,14 +1525,21 @@ function initSearchConsole(){
   loadSearchConsole();
 }
 function loadSearchConsole(){
- fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=fetch_search_console'})
-  .then(r=>r.json()).then(r=>{
-    if(r.success && searchConsoleGrid){
-      searchConsoleGrid.updateConfig({data:r.data.map(d=>[
-        d.query,d.clicks,d.impressions,d.ctr,d.position
-      ])}).forceRender();
-    }
-  });
+  log('SearchConsole: sending request');
+  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=fetch_search_console'})
+    .then(r=>{ log('SearchConsole: HTTP '+r.status); return r.json(); })
+    .then(r=>{
+      log('SearchConsole: response '+JSON.stringify(r));
+      if(r.success && searchConsoleGrid){
+        log('SearchConsole: updating grid');
+        searchConsoleGrid.updateConfig({data:r.data.map(d=>[
+          d.query,d.clicks,d.impressions,d.ctr,d.position
+        ])}).forceRender();
+      } else {
+        log('SearchConsole: failed to load data');
+      }
+    })
+    .catch(err=>log('SearchConsole: error '+err));
 }
 function initUserLog(){
   userLogGrid=new gridjs.Grid({

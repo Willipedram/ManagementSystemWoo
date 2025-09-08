@@ -7,6 +7,11 @@ require_once __DIR__.'/prompt_template.php';
 require_once __DIR__.'/classes/UserManager.php';
 $action = isset($_POST['action']) ? $_POST['action'] : '';
 
+function has_perm($p){
+  $perm = $_SESSION['permissions'] ?? '';
+  return $perm === 'all' || strpos($perm,$p) !== false;
+}
+
 $publicActions = array('login','db_connect','load_saved_config','local_db_connect',
   'local_load_config','local_check_config','admin_init','admin_check');
 if(!isset($_SESSION['auth']) && !in_array($action,$publicActions)){
@@ -230,6 +235,7 @@ case 'admin_init':
   echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
   break;
 case 'users_list':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect_local();
   if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $mgr = new UserManager($db, $_SESSION['logdb']['prefix']);
@@ -237,6 +243,7 @@ case 'users_list':
   $db->close();
   break;
 case 'user_get':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect_local();
   if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
@@ -247,6 +254,7 @@ case 'user_get':
   $db->close();
   break;
 case 'user_create':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect_local();
   if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
@@ -266,6 +274,7 @@ case 'user_create':
   $db->close();
   break;
 case 'user_update':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect_local();
   if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
@@ -285,6 +294,7 @@ case 'user_update':
   $db->close();
   break;
 case 'user_delete':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect_local();
   if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
@@ -294,6 +304,7 @@ case 'user_delete':
   $db->close();
   break;
 case 'list_categories':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
   $rows = array();
@@ -303,6 +314,7 @@ case 'list_categories':
   echo json_encode(array('success'=>true,'data'=>$rows));
   break;
 case 'product_total':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
   $cnt = 0;
@@ -312,6 +324,7 @@ case 'product_total':
   echo json_encode(array('success'=>true,'total'=>$cnt));
   break;
 case 'unassigned_products':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect(); if(!$db) break;
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'data'=>array())); $db->close(); break; }
   $prefix = $_SESSION['db']['prefix'];
@@ -335,6 +348,7 @@ case 'assign_quota':
   $user = intval($_POST['user_id'] ?? 0);
   $count = intval($_POST['count'] ?? 0);
   if(!$user || $count<=0){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); break; }
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect(); if(!$db) break;
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
   $wp = $_SESSION['db']['prefix'];
@@ -364,6 +378,7 @@ case 'assign_category':
   $user = intval($_POST['user_id'] ?? 0);
   $cat = intval($_POST['cat_id'] ?? 0);
   if(!$user || !$cat){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); break; }
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect(); if(!$db) break;
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
   $wp = $_SESSION['db']['prefix'];
@@ -393,6 +408,7 @@ case 'assign_manual':
   $ids = isset($_POST['ids']) ? $_POST['ids'] : '';
   $arr = array_filter(array_map('intval',explode(',', $ids)));
   if(!$user || !$arr){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); break; }
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $lp = $_SESSION['logdb']['prefix'];
   $inserted=0; $conflicts=array();
@@ -411,6 +427,7 @@ case 'assign_manual':
   break;
 
 case 'assignment_users':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $ldb = connect_local();
   if(!$ldb){ echo json_encode(array('success'=>false,'data'=>array())); break; }
   $lp = $_SESSION['logdb']['prefix'];
@@ -423,6 +440,7 @@ case 'assignment_users':
 
 case 'get_assign_mode':
   $uid = intval($_POST['user_id'] ?? 0);
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $ldb = connect_local();
   if(!$ldb){ echo json_encode(array('success'=>false)); break; }
   $lp = $_SESSION['logdb']['prefix'];
@@ -436,6 +454,7 @@ case 'get_assign_mode':
 case 'set_assign_mode':
   $uid = intval($_POST['user_id'] ?? 0);
   $mode = $_POST['mode'] ?? '';
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $ldb = connect_local();
   if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $lp = $_SESSION['logdb']['prefix'];
@@ -452,6 +471,7 @@ case 'set_assign_mode':
 
 case 'user_assignments':
   $uid = intval($_POST['user_id'] ?? 0);
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $db = connect(); if(!$db) break;
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'data'=>array())); $db->close(); break; }
   $wp = $_SESSION['db']['prefix'];
@@ -471,6 +491,7 @@ case 'user_assignments':
   break;
 
 case 'remove_assignment':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $uid = intval($_POST['user_id'] ?? 0);
   $pid = intval($_POST['product_id'] ?? 0);
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false)); break; }
@@ -484,6 +505,7 @@ case 'remove_assignment':
   break;
 
 case 'transfer_assignment':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
   $pid = intval($_POST['product_id'] ?? 0);
   $target = intval($_POST['target_user'] ?? 0);
   $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
