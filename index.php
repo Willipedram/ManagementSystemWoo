@@ -859,7 +859,12 @@ function renderTable(id, labels, data){
     let pct = total ? ((Number(data[i])/total)*100).toFixed(1) : 0;
     rows+=`<tr><td>${label}</td><td>${data[i]}</td><td>${pct}%</td></tr>`;
   });
-  $('#'+id+' tbody').html(rows);
+  const selector = '#' + id;
+  $(selector + ' tbody').html(rows);
+  if($.fn.DataTable.isDataTable(selector)){
+    $(selector).DataTable().destroy();
+  }
+  $(selector).DataTable({paging:false, searching:false, info:false, language:{url:'//cdn.datatables.net/plug-ins/1.13.8/i18n/fa.json'}});
 }
 
 function loadAnalytics(){
@@ -897,6 +902,24 @@ log('analytics error: '+res.message);
 let analyticsLoaded=false;
 $('button[data-bs-target="#analytics"]').on('shown.bs.tab',function(){
  if(!analyticsLoaded){ loadAnalytics(); analyticsLoaded=true; }
+});
+
+function loadProductSeo(){
+  $.post('ajax.php',{action:'fetch_product_seo'},function(res){
+    if(res.success){
+      let html='<table id="productSeoMetrics" class="table table-sm"><thead><tr><th>Page</th><th>Clicks</th><th>Impressions</th></tr></thead><tbody>';
+      res.data.products.forEach(r=>{ html+=`<tr><td>${r.page}</td><td>${r.clicks}</td><td>${r.impressions}</td></tr>`; });
+      html+='</tbody></table>';
+      $('#productSeoTable').html(html);
+      $('#productSeoMetrics').DataTable({paging:false, searching:false, info:false, language:{url:'//cdn.datatables.net/plug-ins/1.13.8/i18n/fa.json'}});
+    }else{
+      $('#productSeoTable').text(res.message);
+    }
+  },'json');
+}
+$(function(){
+  $('body').append('<div class="container mt-4"><h5>SEO Metrics</h5><div id="productSeoTable"></div></div>');
+  loadProductSeo();
 });
 </script>
 <?php endif; ?>
