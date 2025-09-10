@@ -164,9 +164,19 @@ case 'fetch_product_seo':
   }
   $products = array();
   $coverage = array('indexed'=>0,'noindex'=>0,'blocked'=>0,'canonical_error'=>0);
-  $res = ($from && $to)
-    ? $ldb->query("SELECT * FROM {$lp}products_seo WHERE last_updated BETWEEN '{$from}' AND '{$to}'")
-    : $ldb->query("SELECT * FROM {$lp}products_seo");
+  $res = null;
+  if($from && $to){
+    if($stmtp = $ldb->prepare("SELECT * FROM {$lp}products_seo WHERE last_updated BETWEEN ? AND ?")){
+      $stmtp->bind_param('ss',$from,$to);
+      $stmtp->execute();
+      $res = $stmtp->get_result();
+      $stmtp->close();
+    } else {
+      $steps[]='products prepare failed';
+    }
+  } else {
+    $res = $ldb->query("SELECT * FROM {$lp}products_seo");
+  }
   if($res){
     while($row = $res->fetch_assoc()){
       $pid = intval($row['product_id']);
@@ -182,6 +192,10 @@ case 'fetch_product_seo':
       if(isset($coverage[$row['indexed_status']])) $coverage[$row['indexed_status']]++;
     }
     $steps[]='products loaded: '.count($products);
+    if(empty($products)){
+      $steps[]='no products found for selected range';
+      error_log("fetch_product_seo: no products for range {$from} - {$to}");
+    }
   } else { $steps[]='products query failed'; }
   $keywords = array();
   $sqlKw = "SELECT product_id,keyword,clicks,impressions,ctr FROM {$lp}product_keywords WHERE 1 {$whereKw}{$dateCond} LIMIT 100";
@@ -194,6 +208,10 @@ case 'fetch_product_seo':
     while($k=$resk->fetch_assoc()) $keywords[]=$k;
     $stmtk->close();
     $steps[]='keywords loaded: '.count($keywords);
+    if(empty($keywords)){
+      $steps[]='no keywords found for selected criteria';
+      error_log("fetch_product_seo: no keywords for criteria");
+    }
   } else { $steps[]='keywords query failed'; }
   $trends = array();
   if($from && $to){
@@ -208,6 +226,10 @@ case 'fetch_product_seo':
     if($rest){ while($t=$rest->fetch_assoc()) $trends[]=$t; }
   }
   $steps[]='trends loaded: '.count($trends);
+  if(empty($trends)){
+    $steps[]='no trends found for selected range';
+    error_log("fetch_product_seo: no trends for range {$from} - {$to}");
+  }
   $db->close(); $ldb->close();
   if(empty($products) && empty($keywords) && empty($trends)){
     echo json_encode(array('success'=>false,'message'=>'هیچ داده‌ای یافت نشد','steps'=>$steps));
