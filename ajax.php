@@ -81,28 +81,36 @@ case 'db_connect':
   }
   break;
 case 'update_product_seo':
+  $steps=array();
   $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده','steps'=>$steps)); break; }
+  $steps[]=['step'=>'local db connected','status'=>'completed'];
   $db  = connect();
-  if(!$ldb || !$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده')); if($ldb) $ldb->close(); if($db) $db->close(); break; }
+  if(!$db){ $steps[]=['step'=>'woocommerce db connected','status'=>'error']; echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه ووکامرس','steps'=>$steps)); $ldb->close(); break; }
+  $steps[]=['step'=>'woocommerce db connected','status'=>'completed'];
   $lp = $_SESSION['logdb']['prefix'];
   $wp = $_SESSION['db']['prefix'];
   $cid = get_setting($ldb,$lp,'sc_client_id');
   $secret = get_setting($ldb,$lp,'sc_client_secret');
   $refresh = get_setting($ldb,$lp,'sc_refresh_token');
   $site = get_setting($ldb,$lp,'sc_site');
-  if(!$cid || !$secret || !$refresh || !$site){ echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است')); $ldb->close(); $db->close(); break; }
+  if(!$cid || !$secret || !$refresh || !$site){ $steps[]=['step'=>'load settings','status'=>'error']; echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است','steps'=>$steps)); $ldb->close(); $db->close(); break; }
+  $steps[]=['step'=>'load settings','status'=>'completed'];
   $ch = curl_init('https://oauth2.googleapis.com/token');
   curl_setopt_array($ch,array(CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>http_build_query(array('client_id'=>$cid,'client_secret'=>$secret,'refresh_token'=>$refresh,'grant_type'=>'refresh_token')),CURLOPT_RETURNTRANSFER=>true));
   $tok = curl_exec($ch); $tok = $tok?json_decode($tok,true):array();
   $acc = $tok['access_token'] ?? '';
-  if(!$acc){ echo json_encode(array('success'=>false,'message'=>'token missing')); $ldb->close(); $db->close(); break; }
+  if(!$acc){ $steps[]=['step'=>'fetch token','status'=>'error']; echo json_encode(array('success'=>false,'message'=>'token missing','steps'=>$steps)); $ldb->close(); $db->close(); break; }
+  $steps[]=['step'=>'fetch token','status'=>'completed'];
   $payload = json_encode(array('startDate'=>date('Y-m-d',strtotime('-1 day')),'endDate'=>date('Y-m-d'),'dimensions'=>array('page','query'),'rowLimit'=>1000));
   $ch = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
   curl_setopt_array($ch,array(CURLOPT_POST=>true,CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),CURLOPT_POSTFIELDS=>$payload,CURLOPT_RETURNTRANSFER=>true));
   $resp = curl_exec($ch); $http = curl_getinfo($ch,CURLINFO_HTTP_CODE);
-  if($resp === false || $http != 200){ $msg='API error'; if($resp){$tmp=json_decode($resp,true); $msg=$tmp['error']['message']??$msg;} echo json_encode(array('success'=>false,'message'=>$msg)); $ldb->close(); $db->close(); break; }
+  if($resp === false || $http != 200){ $msg='API error'; if($resp){$tmp=json_decode($resp,true); $msg=$tmp['error']['message']??$msg;} $steps[]=['step'=>'fetch analytics','status'=>'error']; echo json_encode(array('success'=>false,'message'=>$msg,'steps'=>$steps)); $ldb->close(); $db->close(); break; }
+  $steps[]=['step'=>'fetch analytics','status'=>'completed'];
+  $ldb->query("UPDATE {$lp}products_seo SET impressions=-1,clicks=-1,ctr=-1,avg_position=-1,indexed_status='noindex',last_updated=NOW()");
   $rows = json_decode($resp,true)['rows'] ?? array();
-  $insSeo = $ldb->prepare("INSERT INTO {$lp}products_seo(product_id,product_name,category_id,impressions,clicks,ctr,avg_position,indexed_status,last_updated) VALUES(?,?,?,?,?,?,?,'indexed',NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),last_updated=NOW()");
+  $insSeo = $ldb->prepare("INSERT INTO {$lp}products_seo(product_id,product_name,category_id,impressions,clicks,ctr,avg_position,indexed_status,last_updated) VALUES(?,?,?,?,?,?,?,'indexed',NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),indexed_status='indexed',last_updated=NOW()");
   $insKw = $ldb->prepare("INSERT INTO {$lp}product_keywords(product_id,keyword,impressions,clicks,ctr,avg_position,last_updated) VALUES(?,?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),last_updated=NOW()");
   $insTr = $ldb->prepare("INSERT INTO {$lp}product_trends(product_id,date,impressions,clicks,ctr,avg_position) VALUES(?,?,?,?,?,?)");
   foreach($rows as $r){
@@ -138,7 +146,40 @@ case 'update_product_seo':
     $insTr->execute();
   }
   $insSeo->close(); $insKw->close(); $insTr->close();
+  save_setting($ldb,$lp,'ps_last_run',date('Y-m-d H:i:s'));
+  save_setting($ldb,$lp,'ps_last_status','success');
+  save_setting($ldb,$lp,'ps_last_log',json_encode($steps,JSON_UNESCAPED_UNICODE));
   $db->close(); $ldb->close();
+  echo json_encode(array('success'=>true,'steps'=>$steps));
+  break;
+case 'ps_get_settings':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال پایگاه داده')); break; }
+  $prefix=$_SESSION['logdb']['prefix'];
+  $settings=array(
+    'auto_update'=>get_setting($db,$prefix,'ps_auto_update')??'0',
+    'interval'=>get_setting($db,$prefix,'ps_interval')??'12',
+    'sc_site'=>get_setting($db,$prefix,'sc_site')??'',
+    'sc_client_id'=>get_setting($db,$prefix,'sc_client_id')??'',
+    'sc_client_secret'=>get_setting($db,$prefix,'sc_client_secret')??'',
+    'sc_refresh_token'=>get_setting($db,$prefix,'sc_refresh_token')??'',
+    'last_run'=>get_setting($db,$prefix,'ps_last_run')??'',
+    'last_status'=>get_setting($db,$prefix,'ps_last_status')??''
+  );
+  $db->close();
+  echo json_encode(array('success'=>true,'settings'=>$settings));
+  break;
+case 'ps_save_settings':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال پایگاه داده')); break; }
+  $prefix=$_SESSION['logdb']['prefix'];
+  save_setting($db,$prefix,'ps_auto_update',isset($_POST['auto_update'])?$_POST['auto_update']:'0');
+  save_setting($db,$prefix,'ps_interval',isset($_POST['interval'])?$_POST['interval']:'12');
+  save_setting($db,$prefix,'sc_site',$_POST['sc_site']??'');
+  save_setting($db,$prefix,'sc_client_id',$_POST['sc_client_id']??'');
+  save_setting($db,$prefix,'sc_client_secret',$_POST['sc_client_secret']??'');
+  save_setting($db,$prefix,'sc_refresh_token',$_POST['sc_refresh_token']??'');
+  $db->close();
   echo json_encode(array('success'=>true));
   break;
 case 'fetch_product_seo':
@@ -182,6 +223,7 @@ case 'fetch_product_seo':
       if(isset($coverage[$row['indexed_status']])) $coverage[$row['indexed_status']]++;
     }
     $steps[]='products loaded: '.count($products);
+    if(!count($products)) $steps[]='no products found for selected range';
   } else { $steps[]='products query failed'; }
   $keywords = array();
   $sqlKw = "SELECT product_id,keyword,clicks,impressions,ctr FROM {$lp}product_keywords WHERE 1 {$whereKw}{$dateCond} LIMIT 100";
@@ -194,6 +236,7 @@ case 'fetch_product_seo':
     while($k=$resk->fetch_assoc()) $keywords[]=$k;
     $stmtk->close();
     $steps[]='keywords loaded: '.count($keywords);
+    if(!count($keywords)) $steps[]='no keywords found for selected criteria';
   } else { $steps[]='keywords query failed'; }
   $trends = array();
   if($from && $to){
@@ -208,6 +251,7 @@ case 'fetch_product_seo':
     if($rest){ while($t=$rest->fetch_assoc()) $trends[]=$t; }
   }
   $steps[]='trends loaded: '.count($trends);
+  if(!count($trends)) $steps[]='no trends found for selected range';
   $db->close(); $ldb->close();
   if(empty($products) && empty($keywords) && empty($trends)){
     echo json_encode(array('success'=>false,'message'=>'هیچ داده‌ای یافت نشد','steps'=>$steps));
