@@ -182,6 +182,7 @@ case 'fetch_product_seo':
       if(isset($coverage[$row['indexed_status']])) $coverage[$row['indexed_status']]++;
     }
     $steps[]='products loaded: '.count($products);
+    if(!count($products)) $steps[]='no products found for selected range';
   } else { $steps[]='products query failed'; }
   $keywords = array();
   $sqlKw = "SELECT product_id,keyword,clicks,impressions,ctr FROM {$lp}product_keywords WHERE 1 {$whereKw}{$dateCond} LIMIT 100";
@@ -194,6 +195,7 @@ case 'fetch_product_seo':
     while($k=$resk->fetch_assoc()) $keywords[]=$k;
     $stmtk->close();
     $steps[]='keywords loaded: '.count($keywords);
+    if(!count($keywords)) $steps[]='no keywords found for selected criteria';
   } else { $steps[]='keywords query failed'; }
   $trends = array();
   if($from && $to){
@@ -208,6 +210,7 @@ case 'fetch_product_seo':
     if($rest){ while($t=$rest->fetch_assoc()) $trends[]=$t; }
   }
   $steps[]='trends loaded: '.count($trends);
+  if(!count($trends)) $steps[]='no trends found for selected range';
   $db->close(); $ldb->close();
   if(empty($products) && empty($keywords) && empty($trends)){
     echo json_encode(array('success'=>false,'message'=>'هیچ داده‌ای یافت نشد','steps'=>$steps));

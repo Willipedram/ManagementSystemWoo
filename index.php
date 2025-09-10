@@ -24,8 +24,9 @@ $canViewAssignments = in_array('all',$permissions) || in_array('view_assignments
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css"/>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<link href="https://cdn.jsdelivr.net/npm/gridjs/dist/theme/mermaid.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/gridjs/dist/gridjs.umd.js"></script>
+<link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
@@ -46,8 +47,8 @@ body {font-family:'Vazirmatn', sans-serif; background-color:#f7f7f7; display:fle
 footer{font-size:.9rem; margin-top:auto;}
 #logPanel{max-height:200px; overflow-y:auto;}
 .section-card{cursor:pointer;}
-#products .gridjs-search{width:100%;}
-#products .gridjs-search input{width:100% !important;}
+#products .dataTables_filter{width:100%;}
+#products .dataTables_filter input{width:100% !important;}
 #logModal .modal-content{height:50vh;}
 #logModal .modal-body{display:flex;flex-direction:column;height:calc(50vh - 56px);}
 #logModal #userLogTable{flex:1;overflow-y:auto;}
@@ -358,7 +359,21 @@ $('#local-connect-btn').click(function(){
 </ul>
 <div class="tab-content mt-4">
 <div class="tab-pane fade show active p-3" id="products">
-<div id="productsTable" style="height:calc(100vh - 200px);"></div>
+<table id="productsTable" class="table table-striped table-bordered" style="width:100%">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>تصویر</th>
+      <th>نام</th>
+      <th>قیمت</th>
+      <th>انبارداری</th>
+      <th>سئو</th>
+      <th>ویرایش</th>
+      <th>نمایش</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
 </div>
 <div class="tab-pane fade p-3" id="analytics">
   <section class="mb-5">
@@ -481,10 +496,10 @@ $('#local-connect-btn').click(function(){
     <div class="d-flex justify-content-end mb-3">
       <button class="btn btn-success" id="addUserBtn">کاربر جدید</button>
     </div>
-    <div id="usersTable"></div>
+    <table id="usersTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
   </div>
   <div class="tab-pane fade p-3" id="assignments">
-    <div id="assignUsersTable"></div>
+    <table id="assignUsersTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
   </div>
   <?php if($canViewSettings): ?>
   <div class="tab-pane fade p-3" id="searchConsole">
@@ -511,7 +526,7 @@ $('#local-connect-btn').click(function(){
             <button class="btn btn-primary w-100" id="filterKeywords">اعمال فیلتر</button>
           </div>
         </div>
-        <div id="searchConsoleTable"></div>
+        <table id="searchConsoleTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
       </div>
       <div class="tab-pane fade" id="scProduct">
         <div class="row g-2 mb-3 align-items-end">
@@ -531,7 +546,7 @@ $('#local-connect-btn').click(function(){
             <button class="btn btn-primary w-100" id="filterProductSeo">اعمال فیلتر</button>
           </div>
         </div>
-        <div id="productSeoGrid"></div>
+        <table id="productSeoTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
         <div class="row mt-4">
           <div class="col-md-6"><div id="bubbleChart" style="height:400px"></div></div>
           <div class="col-md-6"><div id="indexPie" style="height:400px"></div></div>
@@ -812,7 +827,7 @@ $('#local-connect-btn').click(function(){
       </div>
       <button type="submit" class="btn btn-primary">ذخیره نقش</button>
     </form>
-    <div id="rolesTable"></div>
+    <table id="rolesTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
    </div>
   </div>
  </div>
@@ -871,9 +886,9 @@ $('#local-connect-btn').click(function(){
     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
    </div>
    <div class="modal-body">
-    <div id="userLogTable" class="mb-3"></div>
+    <table id="userLogTable" class="table table-striped mb-3 w-100"><thead><tr></tr></thead><tbody></tbody></table>
     <hr>
-    <div id="userSessionTable"></div>
+    <table id="userSessionTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
    </div>
   </div>
  </div>
@@ -888,9 +903,9 @@ $('#local-connect-btn').click(function(){
     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
    </div>
    <div class="modal-body">
-    <div id="logsTable" class="mb-3"></div>
+    <table id="logsTable" class="table table-striped mb-3 w-100"><thead><tr></tr></thead><tbody></tbody></table>
     <hr>
-    <div id="sessionsTable"></div>
+    <table id="sessionsTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
    </div>
   </div>
  </div>
@@ -959,7 +974,7 @@ $('#local-connect-btn').click(function(){
     </div>
     <div class="mt-3">
       <h6>محصولات تخصیص‌یافته</h6>
-      <div id="assignedProductsTable"></div>
+      <table id="assignedProductsTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
     </div>
    </div>
   </div>
@@ -1387,8 +1402,8 @@ $('#toggleLog').click(()=>$('#logPanel').toggleClass('d-none'));
 $('#copyLog').click(()=>{ navigator.clipboard.writeText($('#logPanel').text()); toastr.info('کپی شد'); });
 $(document).ajaxStart(()=>NProgress.start());
 $(document).ajaxStop(()=>NProgress.done());
-// Grid.js tables
-let productsGrid, usersGrid, logsGrid, userLogGrid, assignGrid, assignProdGrid, productSeoGrid, searchConsoleGrid, sessionsGrid, userSessionGrid;
+// DataTables tables
+let productsTable, usersTable, logsTable, userLogDataTable, assignUsersTable, assignedProductsTable, productSeoTable, searchConsoleTable, sessionsTable, userSessionDataTable, rolesTable;
 let productsInit=false, usersInit=false, assignmentsInit=false, logsInit=false, scKeywordsInit=false, scProductInit=false;
 function seoBadge(s){
   let cls='bg-secondary text-white';
@@ -1398,15 +1413,23 @@ function seoBadge(s){
   return `<span class="badge ${cls} px-2">${s}</span>`;
 }
 function initProducts(){
-  productsGrid=new gridjs.Grid({
-    columns:[{name:'ID',hidden:true},'تصویر','نام','قیمت','انبارداری','سئو','ویرایش','نمایش'],
-    data:[],
-    pagination:false,
-    sort:true,
-    search:true,
-    style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}},
-    language:{search:{placeholder:'جستجو...'},pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
-  }).render(document.getElementById('productsTable'));
+  productsTable=$('#productsTable').DataTable({
+    columns:[
+      {data:'id', visible:false},
+      {data:'image', render:data=>`<img src="${data}" width="50" height="50">`},
+      {data:'name'},
+      {data:'price'},
+      {data:'stock', render:data=>`<span class='${data=="موجود"?'text-success':'text-danger'}'>${data}</span>`},
+      {data:'seo', render:data=>seoBadge(data)},
+      {data:null, orderable:false, render:row=>`<button class='btn btn-sm btn-primary edit' data-id='${row.id}'>ویرایش</button>`},
+      {data:'link', orderable:false, render:data=>`<a class='btn btn-sm btn-outline-secondary' target='_blank' href='${data}'>نمایش</a>`}
+    ],
+    searching:true,
+    paging:false,
+    info:false,
+    columnDefs:[{targets:'_all', className:'text-center'}],
+    language:{search:'',searchPlaceholder:'جستجو...'}
+  });
   loadProducts();
 }
 function loadProducts(){
@@ -1415,29 +1438,28 @@ function loadProducts(){
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=list_products'})
   .then(r=>r.json()).then(r=>{
     if(r.success){
-      productsGrid.updateConfig({data:r.data.map(p=>[
-        p.id,
-        gridjs.html(`<img src="${p.image}" width="50" height="50">`),
-        p.name,
-        p.price,
-        gridjs.html(`<span class='${p.stock=='موجود'?'text-success':'text-danger'}'>${p.stock}</span>`),
-        gridjs.html(seoBadge(p.seo)),
-        gridjs.html(`<button class='btn btn-sm btn-primary edit' data-id='${p.id}'>ویرایش</button>`),
-        gridjs.html(`<a class='btn btn-sm btn-outline-secondary' target='_blank' href='${p.link}'>نمایش</a>`)
-      ])}).forceRender();
+      productsTable.clear();
+      productsTable.rows.add(r.data).draw();
     }else{ toastr.error(r.message); }
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
 function initUsers(){
-  usersGrid=new gridjs.Grid({
-    columns:['ID','نام کاربری','نقش','وضعیت','ایجاد','اقدامات'],
-    data:[],
-    pagination:{limit:20},
-    sort:true,
-    search:true,
-    style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}},
-    language:{search:{placeholder:'جستجو...'},pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
-  }).render(document.getElementById('usersTable'));
+  usersTable=$('#usersTable').DataTable({
+    columns:[
+      {title:'ID'},
+      {title:'نام کاربری'},
+      {title:'نقش'},
+      {title:'وضعیت'},
+      {title:'ایجاد'},
+      {title:'اقدامات'}
+    ],
+    pageLength:20,
+    ordering:true,
+    searching:true,
+    info:false,
+    language:{search:'',searchPlaceholder:'جستجو...'},
+    columnDefs:[{targets:'_all',className:'text-center'}]
+  });
   loadUsers();
 }
 function loadUsers(){
@@ -1446,30 +1468,37 @@ function loadUsers(){
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=users_list'})
   .then(r=>r.json()).then(r=>{
     if(r.success){
-      usersGrid.updateConfig({data:r.data.map(u=>[
+      const rows=r.data.map(u=>[
         u.id,
         u.username,
         u.role,
         u.status,
         toJalali(u.created_at),
-        gridjs.html(`<button class='btn btn-sm btn-secondary assign-products' data-id='${u.id}' data-name='${u.username}'>تخصیص</button> ` +
-                     `<button class='btn btn-sm btn-info user-log' data-id='${u.id}' data-name='${u.username}'>لاگ</button> ` +
-                     `<button class='btn btn-sm btn-primary edit-user' data-id='${u.id}'>ویرایش</button> ` +
-                     `<button class='btn btn-sm btn-danger delete-user' data-id='${u.id}'>حذف</button>`)
-      ])}).forceRender();
+        `<button class='btn btn-sm btn-secondary assign-products' data-id='${u.id}' data-name='${u.username}'>تخصیص</button> `+
+        `<button class='btn btn-sm btn-info user-log' data-id='${u.id}' data-name='${u.username}'>لاگ</button> `+
+        `<button class='btn btn-sm btn-primary edit-user' data-id='${u.id}'>ویرایش</button> `+
+        `<button class='btn btn-sm btn-danger delete-user' data-id='${u.id}'>حذف</button>`
+      ]);
+      usersTable.clear();
+      usersTable.rows.add(rows).draw();
     }
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
 
 function initAssignments(){
-  assignGrid=new gridjs.Grid({
-    columns:['کاربر','حالت فعال','تعداد','اقدامات'],
-    data:[],
-    pagination:{limit:20},
-    search:false,
-    sort:false,
-    style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}}
-  }).render(document.getElementById('assignUsersTable'));
+  assignUsersTable=$('#assignUsersTable').DataTable({
+    columns:[
+      {title:'کاربر'},
+      {title:'حالت فعال'},
+      {title:'تعداد'},
+      {title:'اقدامات'}
+    ],
+    pageLength:20,
+    searching:false,
+    ordering:false,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-center'}]
+  });
   loadAssignUsers();
 }
 
@@ -1478,13 +1507,15 @@ function loadAssignUsers(){
  NProgress.start();
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=assignment_users'})
   .then(r=>r.json()).then(r=>{
-    if(r.success && assignGrid){
-      assignGrid.updateConfig({data:r.data.map(u=>[
+    if(r.success && assignUsersTable){
+      const rows=r.data.map(u=>[
         u.username,
         u.mode||'',
         u.cnt,
-        gridjs.html(`<button class='btn btn-sm btn-secondary manage-assign' data-id='${u.id}' data-name='${u.username}'>مدیریت محصولات</button>`)
-      ])}).forceRender();
+        `<button class='btn btn-sm btn-secondary manage-assign' data-id='${u.id}' data-name='${u.username}'>مدیریت محصولات</button>`
+      ]);
+      assignUsersTable.clear();
+      assignUsersTable.rows.add(rows).draw();
     }
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
@@ -1504,25 +1535,33 @@ function setModeUI(mode){
 }
 
 function loadAssignedProducts(uid){
-  if(assignProdGrid){ assignProdGrid.destroy(); }
-  assignProdGrid=new gridjs.Grid({
-    columns:['ID','نام','حذف','انتقال'],
-    data:[],
-    pagination:{limit:10},
-    search:false,
-    style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}}
-  }).render(document.getElementById('assignedProductsTable'));
+  if(assignedProductsTable){ assignedProductsTable.clear().destroy(); }
+  assignedProductsTable=$('#assignedProductsTable').DataTable({
+    columns:[
+      {title:'ID'},
+      {title:'نام'},
+      {title:'حذف'},
+      {title:'انتقال'}
+    ],
+    pageLength:10,
+    searching:false,
+    ordering:false,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-center'}]
+  });
   const toast=toastr.info('لطفاً صبر کنید، داده‌ها در حال بارگیری است',{timeOut:0,extendedTimeOut:0});
   NProgress.start();
   fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`action=user_assignments&user_id=${uid}`})
    .then(r=>r.json()).then(r=>{
-     if(r.success && assignProdGrid){
-       assignProdGrid.updateConfig({data:r.data.map(p=>[
+     if(r.success && assignedProductsTable){
+       const rows=r.data.map(p=>[
          p.id,
          p.title,
-         gridjs.html(`<button class='btn btn-sm btn-danger rm-assign' data-id='${p.id}'>حذف</button>`),
-         gridjs.html(`<button class='btn btn-sm btn-warning transfer-assign' data-id='${p.id}'>انتقال</button>`)
-       ])}).forceRender();
+         `<button class='btn btn-sm btn-danger rm-assign' data-id='${p.id}'>حذف</button>`,
+         `<button class='btn btn-sm btn-warning transfer-assign' data-id='${p.id}'>انتقال</button>`
+       ]);
+       assignedProductsTable.clear();
+       assignedProductsTable.rows.add(rows).draw();
      }
    }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
@@ -1583,50 +1622,69 @@ function loadRoleOptions(selected){
  },'json');
 }
 
-let rolesGrid;
 function initRoles(){
-  if(!rolesGrid){
-    rolesGrid=new gridjs.Grid({
-      columns:['نام نقش','دسترسی‌ها','اقدامات'],
-      data:[],
-      style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}},
-      pagination:{limit:10},
-      search:false
-    }).render(document.getElementById('rolesTable'));
+  if(!rolesTable){
+    rolesTable=$('#rolesTable').DataTable({
+      columns:[
+        {title:'نام نقش'},
+        {title:'دسترسی‌ها'},
+        {title:'اقدامات'}
+      ],
+      pageLength:10,
+      searching:false,
+      ordering:false,
+      info:false,
+      columnDefs:[{targets:'_all',className:'text-center'}]
+    });
   }
 }
 
 function loadRoles(){
  $.post('ajax.php',{action:'roles_list'},function(r){
-   if(r.success && rolesGrid){
-     rolesGrid.updateConfig({data:r.data.map(ro=>[
+   if(r.success && rolesTable){
+     const rows=r.data.map(ro=>[
        ro.name,
        ro.permissions==='all'?'همه':ro.permissions,
-       gridjs.html(ro.id==1?'':`<button class='btn btn-sm btn-primary edit-role' data-id='${ro.id}'>ویرایش</button> <button class='btn btn-sm btn-danger del-role' data-id='${ro.id}'>حذف</button>`)
-     ])}).forceRender();
+       ro.id==1?'':`<button class='btn btn-sm btn-primary edit-role' data-id='${ro.id}'>ویرایش</button> <button class='btn btn-sm btn-danger del-role' data-id='${ro.id}'>حذف</button>`
+     ]);
+     rolesTable.clear();
+     rolesTable.rows.add(rows).draw();
    }
  },'json');
 }
 function initLogs(){
-  logsGrid=new gridjs.Grid({
-    columns:['کاربر','عملیات','آی‌پی','کشور','شهر','ISP','زمان'],
-    data:[],
-    pagination:{limit:20},
-    sort:true,
-    search:false,
-    style:{table:{direction:'ltr'},th:{'text-align':'right'},td:{'text-align':'right'}},
-    language:{pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
+  logsTable=$('#logsTable').DataTable({
+    columns:[
+      {title:'کاربر'},
+      {title:'عملیات'},
+      {title:'آی‌پی'},
+      {title:'کشور'},
+      {title:'شهر'},
+      {title:'ISP'},
+      {title:'زمان'}
+    ],
+    pageLength:20,
+    searching:false,
+    ordering:true,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-start'}],
+    language:{paginate:{previous:'قبلی',next:'بعدی'}}
   });
-  const el=document.getElementById('logsTable'); if(el) logsGrid.render(el);
-  sessionsGrid=new gridjs.Grid({
-    columns:['کاربر','آی‌پی','دستگاه','انقضا',''],
-    data:[],
-    pagination:{limit:20},
-    search:false,
-    style:{table:{direction:'ltr'},th:{'text-align':'right'},td:{'text-align':'right'}},
-    language:{pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
+  sessionsTable=$('#sessionsTable').DataTable({
+    columns:[
+      {title:'کاربر'},
+      {title:'آی‌پی'},
+      {title:'دستگاه'},
+      {title:'انقضا'},
+      {title:''}
+    ],
+    pageLength:20,
+    searching:false,
+    ordering:false,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-start'}],
+    language:{paginate:{previous:'قبلی',next:'بعدی'}}
   });
-  const sel=document.getElementById('sessionsTable'); if(sel) sessionsGrid.render(sel);
   loadLogs();
 }
 function loadLogs(){
@@ -1634,21 +1692,25 @@ function loadLogs(){
  NProgress.start();
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=logs_list'})
   .then(r=>r.json()).then(r=>{
-    if(r.success && logsGrid){
-      logsGrid.updateConfig({data:r.data.map(l=>[
+    if(r.success && logsTable){
+      const rows=r.data.map(l=>[
         l.username,l.action,l.ip_address,l.country,l.city,l.isp,toJalali(l.timestamp)
-      ])}).forceRender();
+      ]);
+      logsTable.clear();
+      logsTable.rows.add(rows).draw();
       if(r.message) log('Logs: '+r.message);
     }
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=sessions_list'})
   .then(r=>r.json()).then(r=>{
-    if(r.success && sessionsGrid){
-      sessionsGrid.updateConfig({data:r.data.map(s=>[
+    if(r.success && sessionsTable){
+      const rows=r.data.map(s=>[
         s.username,s.ip_address,s.device_info,toJalali(s.expires_at),
-        gridjs.html(`<button class='btn btn-sm btn-danger logout-session' data-id='${s.id}'>خروج</button>`)
-      ])}).forceRender();
+        `<button class='btn btn-sm btn-danger logout-session' data-id='${s.id}'>خروج</button>`
+      ]);
+      sessionsTable.clear();
+      sessionsTable.rows.add(rows).draw();
     }
   });
 }
@@ -1657,15 +1719,20 @@ function initSearchConsole(){
   const today=new Date().toISOString().slice(0,10);
   const past=new Date(Date.now()-89*24*3600*1000).toISOString().slice(0,10);
   $('#kwTo').val(today); $('#kwFrom').val(past);
-  searchConsoleGrid=new gridjs.Grid({
-    columns:['کوئری','کلیک','ایمپرشن','CTR','رتبه'],
-    data:[],
-    pagination:false,
-    sort:true,
-    search:false,
-    language:{pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
+  searchConsoleTable=$('#searchConsoleTable').DataTable({
+    columns:[
+      {title:'کوئری'},
+      {title:'کلیک'},
+      {title:'ایمپرشن'},
+      {title:'CTR'},
+      {title:'رتبه'}
+    ],
+    paging:false,
+    searching:false,
+    ordering:true,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-center'}]
   });
-  const el=document.getElementById('searchConsoleTable'); if(el) searchConsoleGrid.render(el);
   loadSearchConsole();
 }
 function loadSearchConsole(){
@@ -1680,11 +1747,13 @@ function loadSearchConsole(){
     .then(r=>{ log('SearchConsole: HTTP '+r.status); return r.json(); })
     .then(r=>{
       log('SearchConsole: response '+JSON.stringify(r));
-      if(r.success && searchConsoleGrid){
-        log('SearchConsole: updating grid');
-        searchConsoleGrid.updateConfig({data:r.data.map(d=>[
+      if(r.success && searchConsoleTable){
+        log('SearchConsole: updating table');
+        const rows=r.data.map(d=>[
           d.query,d.clicks,d.impressions,d.ctr,d.position
-        ])}).forceRender();
+        ]);
+        searchConsoleTable.clear();
+        searchConsoleTable.rows.add(rows).draw();
       } else {
         log('SearchConsole: failed to load data');
         if(r.message) log('SearchConsole: '+r.message);
@@ -1699,16 +1768,21 @@ function initProductSeo(){
   const today=new Date().toISOString().slice(0,10);
   const past=new Date(Date.now()-89*24*3600*1000).toISOString().slice(0,10);
   $('#scTo').val(today); $('#scFrom').val(past);
-  productSeoGrid=new gridjs.Grid({
-    columns:['محصول','ایمپرشن','کلیک','CTR','رتبه','ایندکس'],
-    data:[],
-    pagination:false,
-    sort:true,
-    search:false,
-    style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}},
-    language:{pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
+  productSeoTable=$('#productSeoTable').DataTable({
+    columns:[
+      {title:'محصول'},
+      {title:'ایمپرشن'},
+      {title:'کلیک'},
+      {title:'CTR'},
+      {title:'رتبه'},
+      {title:'ایندکس'}
+    ],
+    paging:false,
+    searching:false,
+    ordering:true,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-center'}]
   });
-  const el=document.getElementById('productSeoGrid'); if(el) productSeoGrid.render(el);
 }
 
 function drawBubbleChart(data){
@@ -1764,9 +1838,10 @@ function loadProductSeo(){
       log('ProductSEO: response '+JSON.stringify(r));
       if(r.steps) r.steps.forEach(s=>log('ProductSEO: '+s));
       if(r.success){
-        if(productSeoGrid){
+        if(productSeoTable){
           const rows=r.products.map(p=>[p.product_name,p.impressions,p.clicks,Number(p.ctr).toFixed(2),p.avg_position,p.indexed_status]);
-          productSeoGrid.updateConfig({data:rows}).forceRender();
+          productSeoTable.clear();
+          productSeoTable.rows.add(rows).draw();
         }
         google.charts.setOnLoadCallback(()=>{
           drawBubbleChart(r.products);
@@ -1780,37 +1855,51 @@ function loadProductSeo(){
    }).catch(err=>log('ProductSEO: error '+err)).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
 function initUserLog(){
-  userLogGrid=new gridjs.Grid({
-    columns:['زمان','عملیات','آی‌پی','کشور','شهر','ISP'],
-    data:[],
-    style:{table:{direction:'ltr'},th:{'text-align':'center'},td:{'text-align':'center'}},
-    pagination:{limit:20},
-    search:false,
-    language:{pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
-  }).render(document.getElementById('userLogTable'));
-  userSessionGrid=new gridjs.Grid({
-    columns:['آی‌پی','دستگاه','انقضا',''],
-    data:[],
-    style:{table:{direction:'ltr'},th:{'text-align':'center'},td:{'text-align':'center'}},
-    pagination:{limit:20},
-    search:false,
-    language:{pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
-  }).render(document.getElementById('userSessionTable'));
+  userLogDataTable=$('#userLogTable').DataTable({
+    columns:[
+      {title:'زمان'},
+      {title:'عملیات'},
+      {title:'آی‌پی'},
+      {title:'کشور'},
+      {title:'شهر'},
+      {title:'ISP'}
+    ],
+    pageLength:20,
+    searching:false,
+    ordering:false,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-center'}]
+  });
+  userSessionDataTable=$('#userSessionTable').DataTable({
+    columns:[
+      {title:'آی‌پی'},
+      {title:'دستگاه'},
+      {title:'انقضا'},
+      {title:''}
+    ],
+    pageLength:20,
+    searching:false,
+    ordering:false,
+    info:false,
+    columnDefs:[{targets:'_all',className:'text-center'}]
+  });
 }
 function loadUserLogs(id){
- if(!userLogGrid || !userSessionGrid) initUserLog();
+ if(!userLogDataTable || !userSessionDataTable) initUserLog();
  const toast=toastr.info('لطفاً صبر کنید، داده‌ها در حال بارگیری است',{timeOut:0,extendedTimeOut:0});
  NProgress.start();
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=fetch_user_logs&id='+id})
   .then(r=>r.json()).then(r=>{
     if(r.success){
       const rows=r.logs.map(d=>[toJalali(d.ts),d.action,d.ip,d.country,d.city,d.isp]);
-      userLogGrid.updateConfig({data:rows}).forceRender();
+      userLogDataTable.clear();
+      userLogDataTable.rows.add(rows).draw();
       const srows=r.sessions.map(s=>[
         s.ip_address,s.device_info,toJalali(s.expires_at),
-        gridjs.html(`<button class='btn btn-sm btn-danger logout-session' data-id='${s.id}'>خروج</button>`)
+        `<button class='btn btn-sm btn-danger logout-session' data-id='${s.id}'>خروج</button>`
       ]);
-      userSessionGrid.updateConfig({data:srows}).forceRender();
+      userSessionDataTable.clear();
+      userSessionDataTable.rows.add(srows).draw();
       $('#logModal').modal('show');
       if(r.message) log('UserLogs: '+r.message);
     }else{ toastr.error(r.message); }
@@ -2147,7 +2236,12 @@ function renderTable(id, labels, data){
     let pct = total ? ((Number(data[i])/total)*100).toFixed(1) : 0;
     rows+=`<tr><td>${label}</td><td>${data[i]}</td><td>${pct}%</td></tr>`;
   });
-  $('#'+id+' tbody').html(rows);
+  const table=$('#'+id);
+  table.find('tbody').html(rows);
+  if ($.fn.DataTable.isDataTable(table)) {
+    table.DataTable().clear().destroy();
+  }
+  table.DataTable({searching:true,paging:false,info:false});
 }
 
 function loadAnalytics(){
