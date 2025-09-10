@@ -49,8 +49,8 @@ body {font-family:'Vazirmatn', sans-serif; background-color:#f7f7f7; display:fle
 footer{font-size:.9rem; margin-top:auto;}
 #logPanel{max-height:200px; overflow-y:auto;}
 .section-card{cursor:pointer;}
-#products .gridjs-search{width:100%;}
-#products .gridjs-search input{width:100% !important;}
+#products .dataTables_filter{width:100%;}
+#products .dataTables_filter input{width:100% !important;}
 #logModal .modal-content{height:50vh;}
 #logModal .modal-body{display:flex;flex-direction:column;height:calc(50vh - 56px);}
 #logModal #userLogTable{flex:1;overflow-y:auto;}
@@ -361,7 +361,21 @@ $('#local-connect-btn').click(function(){
 </ul>
 <div class="tab-content mt-4">
 <div class="tab-pane fade show active p-3" id="products">
-<div id="productsTable" style="height:calc(100vh - 200px);"></div>
+<table id="productsTable" class="table table-striped table-bordered" style="width:100%">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>تصویر</th>
+      <th>نام</th>
+      <th>قیمت</th>
+      <th>انبارداری</th>
+      <th>سئو</th>
+      <th>ویرایش</th>
+      <th>نمایش</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
 </div>
 <div class="tab-pane fade p-3" id="analytics">
   <section class="mb-5">
@@ -1390,8 +1404,8 @@ $('#toggleLog').click(()=>$('#logPanel').toggleClass('d-none'));
 $('#copyLog').click(()=>{ navigator.clipboard.writeText($('#logPanel').text()); toastr.info('کپی شد'); });
 $(document).ajaxStart(()=>NProgress.start());
 $(document).ajaxStop(()=>NProgress.done());
-// Grid.js tables
-let productsGrid, usersGrid, logsGrid, userLogGrid, assignGrid, assignProdGrid, productSeoGrid, searchConsoleGrid, sessionsGrid, userSessionGrid;
+// DataTables & Grid.js tables
+let productsTable, usersGrid, logsGrid, userLogGrid, assignGrid, assignProdGrid, productSeoGrid, searchConsoleGrid, sessionsGrid, userSessionGrid;
 let productsInit=false, usersInit=false, assignmentsInit=false, logsInit=false, scKeywordsInit=false, scProductInit=false;
 function seoBadge(s){
   let cls='bg-secondary text-white';
@@ -1401,15 +1415,23 @@ function seoBadge(s){
   return `<span class="badge ${cls} px-2">${s}</span>`;
 }
 function initProducts(){
-  productsGrid=new gridjs.Grid({
-    columns:[{name:'ID',hidden:true},'تصویر','نام','قیمت','انبارداری','سئو','ویرایش','نمایش'],
-    data:[],
-    pagination:false,
-    sort:true,
-    search:true,
-    style:{table:{direction:'rtl'},th:{'text-align':'center'},td:{'text-align':'center'}},
-    language:{search:{placeholder:'جستجو...'},pagination:{previous:'قبلی',next:'بعدی',showing:'نمایش',results:'نتیجه'}}
-  }).render(document.getElementById('productsTable'));
+  productsTable=$('#productsTable').DataTable({
+    columns:[
+      {data:'id', visible:false},
+      {data:'image', render:data=>`<img src="${data}" width="50" height="50">`},
+      {data:'name'},
+      {data:'price'},
+      {data:'stock', render:data=>`<span class='${data=="موجود"?'text-success':'text-danger'}'>${data}</span>`},
+      {data:'seo', render:data=>seoBadge(data)},
+      {data:null, orderable:false, render:row=>`<button class='btn btn-sm btn-primary edit' data-id='${row.id}'>ویرایش</button>`},
+      {data:'link', orderable:false, render:data=>`<a class='btn btn-sm btn-outline-secondary' target='_blank' href='${data}'>نمایش</a>`}
+    ],
+    searching:true,
+    paging:false,
+    info:false,
+    columnDefs:[{targets:'_all', className:'text-center'}],
+    language:{search:'',searchPlaceholder:'جستجو...'}
+  });
   loadProducts();
 }
 function loadProducts(){
@@ -1418,16 +1440,8 @@ function loadProducts(){
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=list_products'})
   .then(r=>r.json()).then(r=>{
     if(r.success){
-      productsGrid.updateConfig({data:r.data.map(p=>[
-        p.id,
-        gridjs.html(`<img src="${p.image}" width="50" height="50">`),
-        p.name,
-        p.price,
-        gridjs.html(`<span class='${p.stock=='موجود'?'text-success':'text-danger'}'>${p.stock}</span>`),
-        gridjs.html(seoBadge(p.seo)),
-        gridjs.html(`<button class='btn btn-sm btn-primary edit' data-id='${p.id}'>ویرایش</button>`),
-        gridjs.html(`<a class='btn btn-sm btn-outline-secondary' target='_blank' href='${p.link}'>نمایش</a>`)
-      ])}).forceRender();
+      productsTable.clear();
+      productsTable.rows.add(r.data).draw();
     }else{ toastr.error(r.message); }
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
