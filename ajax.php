@@ -98,6 +98,18 @@ case 'save_licenses':
   if(file_put_contents($path,json_encode($licenses,JSON_UNESCAPED_UNICODE))!==false){ echo json_encode(array('success'=>true)); }
   else{ echo json_encode(array('success'=>false,'message'=>'ذخیره نشد')); }
   break;
+case 'fetch_product_seo':
+  $db = connect(); if(!$db) break;
+  $data = array('products'=>array(), 'keywords'=>array(), 'trends'=>array());
+  $res = $db->query("SELECT page,clicks,impressions,ctr,position FROM msw_products_seo ORDER BY clicks DESC");
+  if($res){ while($r=$res->fetch_assoc()){ $data['products'][]=$r; } }
+  $res = $db->query("SELECT page,query,clicks,impressions,ctr,position FROM msw_product_keywords ORDER BY clicks DESC LIMIT 100");
+  if($res){ while($r=$res->fetch_assoc()){ $data['keywords'][]=$r; } }
+  $res = $db->query("SELECT date,clicks,impressions,ctr,position FROM msw_product_trends ORDER BY date DESC LIMIT 100");
+  if($res){ while($r=$res->fetch_assoc()){ $data['trends'][]=$r; } }
+  echo json_encode(array('success'=>true,'data'=>$data));
+  $db->close();
+  break;
 case 'list_products':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
