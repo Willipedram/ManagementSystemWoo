@@ -26,6 +26,9 @@ $canViewAssignments = in_array('all',$permissions) || in_array('view_assignments
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/gridjs/dist/theme/mermaid.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/gridjs/dist/gridjs.umd.js"></script>
+<link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
@@ -2147,7 +2150,12 @@ function renderTable(id, labels, data){
     let pct = total ? ((Number(data[i])/total)*100).toFixed(1) : 0;
     rows+=`<tr><td>${label}</td><td>${data[i]}</td><td>${pct}%</td></tr>`;
   });
-  $('#'+id+' tbody').html(rows);
+  const table=$('#'+id);
+  table.find('tbody').html(rows);
+  if ($.fn.DataTable.isDataTable(table)) {
+    table.DataTable().clear().destroy();
+  }
+  table.DataTable({searching:true,paging:false,info:false});
 }
 
 function loadAnalytics(){
