@@ -2,12 +2,19 @@
 session_start();
 header('Content-Type: application/json; charset=utf-8');
 
-$AUTH_TOKEN = '09128334246';
 $configFile = __DIR__.'/config.secure';
 require_once __DIR__.'/prompt_template.php';
+require_once __DIR__.'/classes/UserManager.php';
 $action = isset($_POST['action']) ? $_POST['action'] : '';
 
-if(!isset($_SESSION['auth']) && $action !== 'login'){
+function has_perm($p){
+  $perm = $_SESSION['permissions'] ?? '';
+  return $perm === 'all' || strpos($perm,$p) !== false;
+}
+
+$publicActions = array('login','db_connect','load_saved_config','local_db_connect',
+  'local_load_config','local_check_config','admin_init','admin_check');
+if(!isset($_SESSION['auth']) && !in_array($action,$publicActions)){
   http_response_code(401);
   echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز'));
   exit;
@@ -15,35 +22,43 @@ if(!isset($_SESSION['auth']) && $action !== 'login'){
 
 switch($action){
 case 'login':
-  $token = isset($_POST['token']) ? $_POST['token'] : '';
-  if($token === $AUTH_TOKEN){
+  $username = trim($_POST['username'] ?? '');
+  $password = $_POST['password'] ?? '';
+  $cfg = secure_load_local_config();
+  if(!$cfg){ echo json_encode(array('success'=>false,'message'=>'تنظیمات پایگاه داده سامانه موجود نیست')); break; }
+  try{ $db = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
+  if($db->connect_errno){ echo json_encode(array('success'=>false,'message'=>$db->connect_error)); break; }
+  $db->set_charset('utf8mb4');
+  init_local_tables($db,$cfg['prefix']);
+  $stmt = $db->prepare("SELECT u.id,u.username,u.full_name,u.password_hash,r.permissions FROM {$cfg['prefix']}users u JOIN {$cfg['prefix']}roles r ON u.role_id=r.id WHERE u.username=? AND u.status='active'");
+  $stmt->bind_param('s',$username);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $row = $res ? $res->fetch_assoc() : null;
+  $stmt->close();
+  if($row && password_verify($password,$row['password_hash'])){
     $_SESSION['auth'] = true;
-    $_SESSION['token'] = $token;
+    $_SESSION['user_id'] = intval($row['id']);
+    $_SESSION['username'] = $row['username'];
+    $_SESSION['full_name'] = $row['full_name'] ?? '';
+    $_SESSION['permissions'] = $row['permissions'];
+    $_SESSION['logdb'] = $cfg;
+    $mainCfg = secure_load_config();
+    if($mainCfg){ $_SESSION['db'] = $mainCfg; }
+    log_event('login');
     echo json_encode(array('success'=>true));
   } else {
-    echo json_encode(array('success'=>false,'message'=>'توکن نامعتبر است'));
+    echo json_encode(array('success'=>false,'message'=>'ورود نامعتبر'));
   }
+  $db->close();
   break;
- case 'logout':
+case 'logout':
+  log_event('logout');
   session_destroy();
   echo json_encode(array('success'=>true));
   break;
-case 'read_wp_config':
-  $config_path = dirname(__DIR__).'/wp-config.php';
-  if(file_exists($config_path)){
-    $config = file_get_contents($config_path);
-    preg_match("/define\(\s*'DB_NAME',\s*'([^']+)'\s*\)/", $config, $m); $name = isset($m[1]) ? $m[1] : '';
-    preg_match("/define\(\s*'DB_USER',\s*'([^']+)'\s*\)/", $config, $m); $user = isset($m[1]) ? $m[1] : '';
-    preg_match("/define\(\s*'DB_PASSWORD',\s*'([^']+)'\s*\)/", $config, $m); $pass = isset($m[1]) ? $m[1] : '';
-    preg_match("/define\(\s*'DB_HOST',\s*'([^']+)'\s*\)/", $config, $m); $host = isset($m[1]) ? $m[1] : 'localhost';
-    preg_match("/\$table_prefix\s*=\s*'([^']+)'/", $config, $m); $prefix = isset($m[1]) ? $m[1] : 'wp_';
-    secure_save_config(compact('host','name','user','pass','prefix'));
-    echo json_encode(array('success'=>true,'name'=>$name,'user'=>$user,'pass'=>$pass,'host'=>$host,'prefix'=>$prefix));
-  } else {
-    echo json_encode(array('success'=>false,'message'=>'فایل wp-config.php پیدا نشد'));
-  }
-  break;
- case 'db_connect':
+case 'db_connect':
   $host = isset($_POST['host']) ? $_POST['host'] : '';
   $name = isset($_POST['name']) ? $_POST['name'] : '';
   $user = isset($_POST['user']) ? $_POST['user'] : '';
@@ -63,6 +78,141 @@ case 'read_wp_config':
     $mysqli->close();
     secure_save_config($_SESSION['db']);
     echo json_encode(array('success'=>true));
+  }
+  break;
+case 'update_product_seo':
+  $ldb = connect_local();
+  $db  = connect();
+  if(!$ldb || !$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده')); if($ldb) $ldb->close(); if($db) $db->close(); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $wp = $_SESSION['db']['prefix'];
+  $cid = get_setting($ldb,$lp,'sc_client_id');
+  $secret = get_setting($ldb,$lp,'sc_client_secret');
+  $refresh = get_setting($ldb,$lp,'sc_refresh_token');
+  $site = get_setting($ldb,$lp,'sc_site');
+  if(!$cid || !$secret || !$refresh || !$site){ echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است')); $ldb->close(); $db->close(); break; }
+  $ch = curl_init('https://oauth2.googleapis.com/token');
+  curl_setopt_array($ch,array(CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>http_build_query(array('client_id'=>$cid,'client_secret'=>$secret,'refresh_token'=>$refresh,'grant_type'=>'refresh_token')),CURLOPT_RETURNTRANSFER=>true));
+  $tok = curl_exec($ch); $tok = $tok?json_decode($tok,true):array();
+  $acc = $tok['access_token'] ?? '';
+  if(!$acc){ echo json_encode(array('success'=>false,'message'=>'token missing')); $ldb->close(); $db->close(); break; }
+  $payload = json_encode(array('startDate'=>date('Y-m-d',strtotime('-1 day')),'endDate'=>date('Y-m-d'),'dimensions'=>array('page','query'),'rowLimit'=>1000));
+  $ch = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
+  curl_setopt_array($ch,array(CURLOPT_POST=>true,CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),CURLOPT_POSTFIELDS=>$payload,CURLOPT_RETURNTRANSFER=>true));
+  $resp = curl_exec($ch); $http = curl_getinfo($ch,CURLINFO_HTTP_CODE);
+  if($resp === false || $http != 200){ $msg='API error'; if($resp){$tmp=json_decode($resp,true); $msg=$tmp['error']['message']??$msg;} echo json_encode(array('success'=>false,'message'=>$msg)); $ldb->close(); $db->close(); break; }
+  $rows = json_decode($resp,true)['rows'] ?? array();
+  $insSeo = $ldb->prepare("INSERT INTO {$lp}products_seo(product_id,product_name,category_id,impressions,clicks,ctr,avg_position,indexed_status,last_updated) VALUES(?,?,?,?,?,?,?,'indexed',NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),last_updated=NOW()");
+  $insKw = $ldb->prepare("INSERT INTO {$lp}product_keywords(product_id,keyword,impressions,clicks,ctr,avg_position,last_updated) VALUES(?,?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),last_updated=NOW()");
+  $insTr = $ldb->prepare("INSERT INTO {$lp}product_trends(product_id,date,impressions,clicks,ctr,avg_position) VALUES(?,?,?,?,?,?)");
+  foreach($rows as $r){
+    $page = $r['keys'][0] ?? '';
+    $kw = $r['keys'][1] ?? '';
+    $clicks = $r['clicks'] ?? 0;
+    $impr = $r['impressions'] ?? 0;
+    $ctr = $impr ? ($clicks/$impr) : 0;
+    $pos = $r['position'] ?? 0;
+    $path = parse_url($page,PHP_URL_PATH);
+    $slug = trim(basename($path),'/');
+    $stmt = $db->prepare("SELECT ID,post_title FROM {$wp}posts WHERE post_name=? AND post_type='product' LIMIT 1");
+    $stmt->bind_param('s',$slug);
+    $stmt->execute();
+    $resP = $stmt->get_result();
+    $prod = $resP ? $resP->fetch_assoc() : null;
+    $stmt->close();
+    if(!$prod) continue;
+    $pid = intval($prod['ID']);
+    $pname = $prod['post_title'];
+    $catId = 0;
+    $stmt = $db->prepare("SELECT t.term_id FROM {$wp}term_relationships tr JOIN {$wp}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id JOIN {$wp}terms t ON tt.term_id=t.term_id WHERE tr.object_id=? AND tt.taxonomy='product_cat' LIMIT 1");
+    $stmt->bind_param('i',$pid);
+    $stmt->execute();
+    $resC = $stmt->get_result();
+    if($rowC = $resC->fetch_assoc()) $catId = intval($rowC['term_id']);
+    $stmt->close();
+    $insSeo->bind_param('isiiidd',$pid,$pname,$catId,$impr,$clicks,$ctr,$pos);
+    $insSeo->execute();
+    $insKw->bind_param('isiiidd',$pid,$kw,$impr,$clicks,$ctr,$pos);
+    $insKw->execute();
+    $insTr->bind_param('iiiddd',$pid,date('Y-m-d'),$impr,$clicks,$ctr,$pos);
+    $insTr->execute();
+  }
+  $insSeo->close(); $insKw->close(); $insTr->close();
+  $db->close(); $ldb->close();
+  echo json_encode(array('success'=>true));
+  break;
+case 'fetch_product_seo':
+  $steps=array();
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال پایگاه داده سامانه','steps'=>$steps)); break; }
+  $steps[]='local db connected';
+  $db = connect();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال پایگاه ووکامرس','steps'=>$steps)); $ldb->close(); break; }
+  $steps[]='woocommerce db connected';
+  $lp = $_SESSION['logdb']['prefix'];
+  $wp = $_SESSION['db']['prefix'];
+  $from = $_POST['from'] ?? '';
+  $to = $_POST['to'] ?? '';
+  $query = $_POST['query'] ?? '';
+  $whereKw = "";
+  $paramsKw = array();
+  if($query !== ''){ $whereKw .= " AND keyword LIKE ?"; $paramsKw[] = "%{$query}%"; }
+  $dateCond = "";
+  if($from && $to){
+    $dateCond = " AND last_updated BETWEEN ? AND ?";
+    $paramsKw[] = $from; $paramsKw[] = $to;
+  }
+  $products = array();
+  $coverage = array('indexed'=>0,'noindex'=>0,'blocked'=>0,'canonical_error'=>0);
+  $res = ($from && $to)
+    ? $ldb->query("SELECT * FROM {$lp}products_seo WHERE last_updated BETWEEN '{$from}' AND '{$to}'")
+    : $ldb->query("SELECT * FROM {$lp}products_seo");
+  if($res){
+    while($row = $res->fetch_assoc()){
+      $pid = intval($row['product_id']);
+      $catName = '';
+      $stmt = $db->prepare("SELECT t.name FROM {$wp}term_relationships tr JOIN {$wp}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id JOIN {$wp}terms t ON tt.term_id=t.term_id WHERE tr.object_id=? AND tt.taxonomy='product_cat' LIMIT 1");
+      $stmt->bind_param('i',$pid);
+      $stmt->execute();
+      $resC = $stmt->get_result();
+      if($rowC = $resC->fetch_assoc()) $catName = $rowC['name'];
+      $stmt->close();
+      $row['category'] = $catName;
+      $products[] = $row;
+      if(isset($coverage[$row['indexed_status']])) $coverage[$row['indexed_status']]++;
+    }
+    $steps[]='products loaded: '.count($products);
+  } else { $steps[]='products query failed'; }
+  $keywords = array();
+  $sqlKw = "SELECT product_id,keyword,clicks,impressions,ctr FROM {$lp}product_keywords WHERE 1 {$whereKw}{$dateCond} LIMIT 100";
+  if($stmtk = $ldb->prepare($sqlKw)){
+    if(count($paramsKw)==1){ $stmtk->bind_param('s',$paramsKw[0]); }
+    elseif(count($paramsKw)==2){ $stmtk->bind_param('ss',$paramsKw[0],$paramsKw[1]); }
+    elseif(count($paramsKw)==3){ $stmtk->bind_param('sss',$paramsKw[0],$paramsKw[1],$paramsKw[2]); }
+    $stmtk->execute();
+    $resk = $stmtk->get_result();
+    while($k=$resk->fetch_assoc()) $keywords[]=$k;
+    $stmtk->close();
+    $steps[]='keywords loaded: '.count($keywords);
+  } else { $steps[]='keywords query failed'; }
+  $trends = array();
+  if($from && $to){
+    $rest = $ldb->prepare("SELECT product_id,date,avg_position,ctr FROM {$lp}product_trends WHERE date BETWEEN ? AND ?");
+    $rest->bind_param('ss',$from,$to);
+    $rest->execute();
+    $rt = $rest->get_result();
+    while($t=$rt->fetch_assoc()) $trends[]=$t;
+    $rest->close();
+  } else {
+    $rest = $ldb->query("SELECT product_id,date,avg_position,ctr FROM {$lp}product_trends WHERE date>=DATE_SUB(CURDATE(),INTERVAL 90 DAY)");
+    if($rest){ while($t=$rest->fetch_assoc()) $trends[]=$t; }
+  }
+  $steps[]='trends loaded: '.count($trends);
+  $db->close(); $ldb->close();
+  if(empty($products) && empty($keywords) && empty($trends)){
+    echo json_encode(array('success'=>false,'message'=>'هیچ داده‌ای یافت نشد','steps'=>$steps));
+  }else{
+    echo json_encode(array('success'=>true,'products'=>$products,'keywords'=>$keywords,'trends'=>$trends,'coverage'=>$coverage,'steps'=>$steps));
   }
   break;
 case 'load_saved_config':
@@ -98,29 +248,676 @@ case 'save_licenses':
   if(file_put_contents($path,json_encode($licenses,JSON_UNESCAPED_UNICODE))!==false){ echo json_encode(array('success'=>true)); }
   else{ echo json_encode(array('success'=>false,'message'=>'ذخیره نشد')); }
   break;
+case 'local_db_connect':
+  $host = isset($_POST['host']) ? $_POST['host'] : '';
+  $name = isset($_POST['name']) ? $_POST['name'] : '';
+  $user = isset($_POST['user']) ? $_POST['user'] : '';
+  $pass = isset($_POST['pass']) ? $_POST['pass'] : '';
+  $prefix = isset($_POST['prefix']) ? $_POST['prefix'] : 'msw_';
+  try{ $mysqli = new mysqli($host,$user,$pass,$name); }
+  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
+  if($mysqli->connect_errno){ echo json_encode(array('success'=>false,'message'=>$mysqli->connect_error)); break; }
+  $mysqli->set_charset('utf8mb4');
+  $_SESSION['logdb']=array('host'=>$host,'name'=>$name,'user'=>$user,'pass'=>$pass,'prefix'=>$prefix);
+  secure_save_local_config($_SESSION['logdb']);
+  init_local_tables($mysqli,$prefix);
+  $mysqli->close();
+  echo json_encode(array('success'=>true));
+  break;
+case 'local_load_config':
+  $cfg = secure_load_local_config();
+  if($cfg){ echo json_encode(array('success'=>true,'host'=>$cfg['host'],'name'=>$cfg['name'],'user'=>$cfg['user'],'pass'=>$cfg['pass'],'prefix'=>$cfg['prefix'])); }
+  else{ echo json_encode(array('success'=>false)); }
+  break;
+case 'local_check_config':
+  $cfg = secure_load_local_config();
+  if(!$cfg){ echo json_encode(array('success'=>false,'message'=>'تنظیمات موجود نیست')); break; }
+  try{ $mysqli = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
+  if($mysqli->connect_errno){ echo json_encode(array('success'=>false,'message'=>$mysqli->connect_error)); }
+  else { $mysqli->close(); echo json_encode(array('success'=>true)); }
+  break;
+case 'fetch_user_logs':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $uid = intval($_POST['id'] ?? 0);
+  $rows = array();
+  $stmt = $db->prepare("SELECT id, action, ip_address, country, city, isp, timestamp FROM {$prefix}user_logs WHERE user_id=? ORDER BY id DESC LIMIT 100");
+  $warn='';
+  if($stmt){
+    $stmt->bind_param('i',$uid);
+    $stmt->execute();
+    $res=$stmt->get_result();
+    while($r=$res->fetch_assoc()){
+      if($r['country']=='' || $r['city']==''){
+        $key=get_setting($db,$prefix,'ipify_key');
+        if($key){
+          $url="https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$r['ip_address']}";
+          $resp=@file_get_contents($url);
+          if($resp){
+            $data=json_decode($resp,true);
+            if($data){
+              $r['country']=$data['location']['country']??'';
+              $r['city']=$data['location']['city']??'';
+              $r['isp']=$data['isp']??'';
+              $upd=$db->prepare("UPDATE {$prefix}user_logs SET country=?, city=?, isp=? WHERE id=?");
+              if($upd){$upd->bind_param('sssi',$r['country'],$r['city'],$r['isp'],$r['id']);$upd->execute();$upd->close();}
+            } else { $warn='Geo decode failed'; }
+          } else { $warn='Geo API request failed'; }
+        } else { $warn='Geo API key missing'; }
+      }
+      $rows[] = array('action'=>$r['action'],'ip'=>$r['ip_address'],'country'=>$r['country'],'city'=>$r['city'],'isp'=>$r['isp'],'ts'=>$r['timestamp']);
+    }
+    $stmt->close();
+  }
+  $sessions=array();
+  $stmt2 = $db->prepare("SELECT id, ip_address, device_info, expires_at FROM {$prefix}sessions WHERE user_id=? AND expires_at>NOW()");
+  if($stmt2){
+    $stmt2->bind_param('i',$uid);
+    $stmt2->execute();
+    $rs=$stmt2->get_result();
+    while($s=$rs->fetch_assoc()) $sessions[]=$s;
+    $stmt2->close();
+  }
+  $db->close();
+  echo json_encode(array('success'=>true,'logs'=>$rows,'sessions'=>$sessions,'message'=>$warn));
+  break;
+case 'logs_list':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $rows = array();
+  $warn='';
+  $res = $db->query("SELECT l.id,u.username, l.action, l.ip_address, l.country, l.city, l.isp, l.timestamp FROM {$prefix}user_logs l JOIN {$prefix}users u ON l.user_id=u.id ORDER BY l.id DESC LIMIT 200");
+  if($res){
+    $key=get_setting($db,$prefix,'ipify_key');
+    while($r=$res->fetch_assoc()){
+      if(($r['country']=='' || $r['city']=='') && $key){
+        $url="https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$r['ip_address']}";
+        $resp=@file_get_contents($url);
+        if($resp){
+          $data=json_decode($resp,true);
+          if($data){
+            $r['country']=$data['location']['country']??'';
+            $r['city']=$data['location']['city']??'';
+            $r['isp']=$data['isp']??'';
+            $db->query("UPDATE {$prefix}user_logs SET country='".$db->real_escape_string($r['country'])."', city='".$db->real_escape_string($r['city'])."', isp='".$db->real_escape_string($r['isp'])."' WHERE id=".$r['id']);
+          } else { $warn='Geo decode failed'; }
+        } else { $warn='Geo API request failed'; }
+      } elseif(($r['country']=='' || $r['city']=='') && !$key){
+        $warn='Geo API key missing';
+      }
+      $rows[]=$r;
+    }
+  }
+  $db->close();
+  echo json_encode(array('success'=>true,'data'=>$rows,'message'=>$warn));
+  break;
+case 'sessions_list':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix=$_SESSION['logdb']['prefix'];
+  $rows=array();
+  $res=$db->query("SELECT s.id,u.username,s.ip_address,s.device_info,s.expires_at FROM {$prefix}sessions s JOIN {$prefix}users u ON s.user_id=u.id WHERE s.expires_at>NOW()");
+  if($res){ while($r=$res->fetch_assoc()) $rows[]=$r; }
+  $db->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  break;
+case 'session_logout':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix=$_SESSION['logdb']['prefix'];
+  $id=intval($_POST['id'] ?? 0);
+  $db->query("DELETE FROM {$prefix}sessions WHERE id=$id");
+  $db->close();
+  echo json_encode(array('success'=>true));
+  break;
+case 'fetch_search_console':
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $cid = get_setting($ldb,$lp,'sc_client_id');
+  $secret = get_setting($ldb,$lp,'sc_client_secret');
+  $refresh = get_setting($ldb,$lp,'sc_refresh_token');
+  $site = get_setting($ldb,$lp,'sc_site');
+  $from = $_POST['from'] ?? date('Y-m-d',strtotime('-3 months'));
+  $to = $_POST['to'] ?? date('Y-m-d');
+  $query = $_POST['query'] ?? '';
+  $ldb->close();
+  if(!$cid || !$secret || !$refresh || !$site){
+    echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است')); break;
+  }
+  $ch = curl_init('https://oauth2.googleapis.com/token');
+  curl_setopt_array($ch,array(
+    CURLOPT_POST=>true,
+    CURLOPT_POSTFIELDS=>http_build_query(array(
+      'client_id'=>$cid,
+      'client_secret'=>$secret,
+      'refresh_token'=>$refresh,
+      'grant_type'=>'refresh_token'
+    )),
+    CURLOPT_RETURNTRANSFER=>true
+  ));
+  $tok = curl_exec($ch);
+  if($tok === false){ echo json_encode(array('success'=>false,'message'=>'token error')); break; }
+  $tok = json_decode($tok,true);
+  $acc = $tok['access_token'] ?? '';
+  if(!$acc){ echo json_encode(array('success'=>false,'message'=>'token missing')); break; }
+  $payloadArr = array(
+    'startDate'=>$from,
+    'endDate'=>$to,
+    'dimensions'=>array('query'),
+    'rowLimit'=>250
+  );
+  if($query !== ''){
+    $payloadArr['dimensionFilterGroups']=array(array(
+      'groupType'=>'and',
+      'filters'=>array(array('dimension'=>'query','operator'=>'contains','expression'=>$query))
+    ));
+  }
+  $payload = json_encode($payloadArr);
+  $ch = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
+  curl_setopt_array($ch,array(
+    CURLOPT_POST=>true,
+    CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),
+    CURLOPT_POSTFIELDS=>$payload,
+    CURLOPT_RETURNTRANSFER=>true
+  ));
+  $resp = curl_exec($ch);
+  $http = curl_getinfo($ch,CURLINFO_HTTP_CODE);
+  if($resp === false){ echo json_encode(array('success'=>false,'message'=>'API error')); break; }
+  $resp = json_decode($resp,true);
+  if($http != 200){
+    $msg = $resp['error']['message'] ?? 'خطای ناشناخته از سرچ کنسول';
+    echo json_encode(array('success'=>false,'message'=>$msg));
+    break;
+  }
+  $rows = $resp['rows'] ?? array();
+  $data = array();
+  foreach($rows as $r){
+    $data[] = array(
+      'query'=>$r['keys'][0] ?? '',
+      'clicks'=>$r['clicks'] ?? 0,
+      'impressions'=>$r['impressions'] ?? 0,
+      'ctr'=>isset($r['ctr'])?round($r['ctr']*100,2).'%' : '0%',
+      'position'=>$r['position'] ?? 0
+    );
+  }
+  if(empty($data)){
+    echo json_encode(array('success'=>false,'message'=>'داده‌ای برای بازه زمانی انتخاب نشده'));
+  }else{
+    echo json_encode(array('success'=>true,'data'=>$data));
+  }
+  break;
+case 'load_api_settings':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false)); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $ipify = get_setting($db,$prefix,'ipify_key');
+  $cid = get_setting($db,$prefix,'sc_client_id');
+  if(!$cid) $cid = '1086032045880-46lhdagtc1os3bq3v3dq8p57lqkgk9gv.apps.googleusercontent.com';
+  $secret = get_setting($db,$prefix,'sc_client_secret');
+  if(!$secret) $secret = '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';
+  $site = get_setting($db,$prefix,'sc_site');
+  $refresh = get_setting($db,$prefix,'sc_refresh_token');
+  $db->close();
+  echo json_encode(array('success'=>true,'ipify'=>$ipify,'sc_client_id'=>$cid,'sc_client_secret'=>$secret,'sc_site'=>$site,'sc_refresh_token'=>$refresh));
+  break;
+case 'save_api_settings':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false)); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $ipify = $_POST['ipify'] ?? '';
+  $cid = $_POST['sc_client_id'] ?? '';
+  $secret = $_POST['sc_client_secret'] ?? '';
+  $site = $_POST['sc_site'] ?? '';
+  $refresh = $_POST['sc_refresh_token'] ?? '';
+  save_setting($db,$prefix,'ipify_key',$ipify);
+  save_setting($db,$prefix,'sc_client_id',$cid);
+  save_setting($db,$prefix,'sc_client_secret',$secret);
+  save_setting($db,$prefix,'sc_site',$site);
+  save_setting($db,$prefix,'sc_refresh_token',$refresh);
+  $db->close();
+  echo json_encode(array('success'=>true));
+  break;
+case 'sc_exchange_code':
+  $code = $_POST['code'] ?? '';
+  $redirect = $_POST['redirect'] ?? '';
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $cid = get_setting($db,$prefix,'sc_client_id');
+  $secret = get_setting($db,$prefix,'sc_client_secret');
+  if(!$code || !$cid || !$secret || !$redirect){
+    $db->close();
+    echo json_encode(array('success'=>false,'message'=>'پارامتر ناقص'));
+    break;
+  }
+  $ch = curl_init('https://oauth2.googleapis.com/token');
+  curl_setopt_array($ch,array(
+    CURLOPT_POST=>true,
+    CURLOPT_POSTFIELDS=>http_build_query(array(
+      'code'=>$code,
+      'client_id'=>$cid,
+      'client_secret'=>$secret,
+      'redirect_uri'=>$redirect,
+      'grant_type'=>'authorization_code'
+    )),
+    CURLOPT_RETURNTRANSFER=>true
+  ));
+  $tok = curl_exec($ch);
+  if($tok === false){ $db->close(); echo json_encode(array('success'=>false,'message'=>'token error')); break; }
+  $tok = json_decode($tok,true);
+  $refresh = $tok['refresh_token'] ?? '';
+  if(!$refresh){ $db->close(); echo json_encode(array('success'=>false,'message'=>'refresh token missing')); break; }
+  save_setting($db,$prefix,'sc_refresh_token',$refresh);
+  $db->close();
+  echo json_encode(array('success'=>true));
+  break;
+case 'admin_check':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false)); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $res = $db->query("SELECT COUNT(*) AS c FROM {$prefix}users WHERE role_id=1");
+  $row = $res ? $res->fetch_assoc() : array('c'=>0);
+  $db->close();
+  echo json_encode(array('success'=>true,'exists'=>$row['c']>0));
+  break;
+case 'admin_init':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
+  $username = trim($_POST['username'] ?? '');
+  $password = $_POST['password'] ?? '';
+  if(!$username || !$password){ echo json_encode(array('success'=>false,'message'=>'نام کاربری و رمز عبور الزامی است')); $db->close(); break; }
+  $data = array(
+    'username'=>$username,
+    'password'=>$password,
+    'full_name'=>'',
+    'phone_number'=>'',
+    'role_id'=>1,
+    'status'=>'active'
+  );
+  $ok = $mgr->create($data);
+  $db->close();
+  session_unset();
+  session_destroy();
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  break;
+case 'users_list':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $mgr = new UserManager($db, $_SESSION['logdb']['prefix']);
+  echo json_encode(array('success'=>true,'data'=>$mgr->all()));
+  $db->close();
+  break;
+case 'user_get':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
+  $id = intval($_POST['id'] ?? 0);
+  $data = $mgr->get($id);
+  if($data){ echo json_encode(array('success'=>true,'data'=>$data)); }
+  else { echo json_encode(array('success'=>false,'message'=>'کاربر یافت نشد')); }
+  $db->close();
+  break;
+case 'user_create':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
+  $username = trim($_POST['username'] ?? '');
+  $password = $_POST['password'] ?? '';
+  if(!$username || !$password){ echo json_encode(array('success'=>false,'message'=>'نام کاربری و رمز عبور الزامی است')); $db->close(); break; }
+  $data = array(
+    'username'=>$username,
+    'password'=>$password,
+    'full_name'=>$_POST['full_name'] ?? '',
+    'phone_number'=>$_POST['phone_number'] ?? '',
+    'role_id'=>intval($_POST['role_id'] ?? 0),
+    'status'=>$_POST['status'] ?? 'active'
+  );
+  $ok = $mgr->create($data);
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  $db->close();
+  break;
+case 'user_update':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
+  $id = intval($_POST['id'] ?? 0);
+  $username = trim($_POST['username'] ?? '');
+  if(!$id || !$username){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); $db->close(); break; }
+  $data = array(
+    'username'=>$username,
+    'password'=>$_POST['password'] ?? '',
+    'full_name'=>$_POST['full_name'] ?? '',
+    'phone_number'=>$_POST['phone_number'] ?? '',
+    'role_id'=>intval($_POST['role_id'] ?? 0),
+    'status'=>$_POST['status'] ?? 'active'
+  );
+  $ok = $mgr->update($id,$data);
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  $db->close();
+  break;
+case 'user_delete':
+  if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
+  $id = intval($_POST['id'] ?? 0);
+  $ok = $mgr->delete($id);
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'حذف نشد'));
+  $db->close();
+  break;
+case 'list_categories':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $rows = array();
+  $res = $db->query("SELECT t.term_id,t.name FROM {$prefix}terms t JOIN {$prefix}term_taxonomy tt ON t.term_id=tt.term_id WHERE tt.taxonomy='product_cat'");
+  if($res){ while($r=$res->fetch_assoc()){ $rows[] = array('id'=>$r['term_id'],'name'=>$r['name']); } }
+  $db->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  break;
+case 'product_total':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $cnt = 0;
+  $res = $db->query("SELECT COUNT(*) c FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'");
+  if($res){ $row = $res->fetch_assoc(); $cnt = intval($row['c']); }
+  $db->close();
+  echo json_encode(array('success'=>true,'total'=>$cnt));
+  break;
+case 'unassigned_products':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect(); if(!$db) break;
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'data'=>array())); $db->close(); break; }
+  $prefix = $_SESSION['db']['prefix'];
+  $lp = $_SESSION['logdb']['prefix'];
+  $assigned = array();
+  $ares = $ldb->query("SELECT product_id FROM {$lp}product_assignments");
+  if($ares){ while($a=$ares->fetch_assoc()){ $assigned[] = intval($a['product_id']); } $ares->close(); }
+  $search = isset($_POST['q']) ? trim($_POST['q']) : '';
+  $query = "SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'";
+  if($assigned){ $query .= " AND ID NOT IN (".implode(',',$assigned).")"; }
+  if($search !== ''){ $query .= " AND post_title LIKE '%".$db->real_escape_string($search)."%'"; }
+  $query .= " ORDER BY ID DESC LIMIT 50";
+  $rows = array();
+  $res = $db->query($query);
+  if($res){ while($r=$res->fetch_assoc()){ $rows[] = array('id'=>$r['ID'],'text'=>$r['post_title']); } }
+  $db->close();
+  $ldb->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  break;
+case 'assign_quota':
+  $user = intval($_POST['user_id'] ?? 0);
+  $count = intval($_POST['count'] ?? 0);
+  if(!$user || $count<=0){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); break; }
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect(); if(!$db) break;
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+  $wp = $_SESSION['db']['prefix'];
+  $lp = $_SESSION['logdb']['prefix'];
+  $assigned = array();
+  $ares = $ldb->query("SELECT product_id FROM {$lp}product_assignments");
+  if($ares){ while($a=$ares->fetch_assoc()){ $assigned[] = intval($a['product_id']); } }
+  $ares && $ares->close();
+  $query = "SELECT ID FROM {$wp}posts WHERE post_type='product' AND post_status='publish'";
+  if($assigned){ $query .= " AND ID NOT IN (".implode(',',$assigned).")"; }
+  $query .= " LIMIT $count";
+  $res = $db->query($query);
+  $inserted = 0;
+  if($res){
+    while($r=$res->fetch_assoc()){
+      $pid = intval($r['ID']);
+      $stmt = $ldb->prepare("INSERT INTO {$lp}product_assignments (user_id,product_id) VALUES (?,?)");
+      if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
+    }
+    $res->close();
+  }
+  $db->close();
+  $ldb->close();
+  echo json_encode(array('success'=>true,'assigned'=>$inserted));
+  break;
+case 'assign_category':
+  $user = intval($_POST['user_id'] ?? 0);
+  $cat = intval($_POST['cat_id'] ?? 0);
+  if(!$user || !$cat){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); break; }
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect(); if(!$db) break;
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+  $wp = $_SESSION['db']['prefix'];
+  $lp = $_SESSION['logdb']['prefix'];
+  $assigned = array();
+  $ares = $ldb->query("SELECT product_id FROM {$lp}product_assignments");
+  if($ares){ while($a=$ares->fetch_assoc()){ $assigned[] = intval($a['product_id']); } }
+  $ares && $ares->close();
+  $query = "SELECT p.ID FROM {$wp}posts p JOIN {$wp}term_relationships tr ON p.ID=tr.object_id JOIN {$wp}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id WHERE p.post_type='product' AND p.post_status='publish' AND tt.taxonomy='product_cat' AND tt.term_id=$cat";
+  if($assigned){ $query .= " AND p.ID NOT IN (".implode(',',$assigned).")"; }
+  $res = $db->query($query);
+  $inserted = 0;
+  if($res){
+    while($r=$res->fetch_assoc()){
+      $pid = intval($r['ID']);
+      $stmt = $ldb->prepare("INSERT INTO {$lp}product_assignments (user_id,product_id) VALUES (?,?)");
+      if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
+    }
+    $res->close();
+  }
+  $db->close();
+  $ldb->close();
+  echo json_encode(array('success'=>true,'assigned'=>$inserted));
+  break;
+case 'assign_manual':
+  $user = intval($_POST['user_id'] ?? 0);
+  $ids = isset($_POST['ids']) ? $_POST['ids'] : '';
+  $arr = array_filter(array_map('intval',explode(',', $ids)));
+  if(!$user || !$arr){ echo json_encode(array('success'=>false,'message'=>'داده نامعتبر')); break; }
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $inserted=0; $conflicts=array();
+  foreach($arr as $pid){
+    $check = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$pid");
+    if($check && $check->num_rows){
+      $assigned = intval($check->fetch_assoc()['user_id']);
+      if($assigned != $user){ $conflicts[]=$pid; continue; }
+    }
+    $stmt = $ldb->prepare("INSERT INTO {$lp}product_assignments (user_id,product_id) VALUES (?,?)");
+    if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
+  }
+  $ldb->close();
+  if($conflicts){ echo json_encode(array('success'=>false,'message'=>'برخی محصولات قبلاً اختصاص یافته‌اند')); }
+  else{ echo json_encode(array('success'=>true,'assigned'=>$inserted)); }
+  break;
+
+case 'assignment_users':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'data'=>array())); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $res = $ldb->query("SELECT u.id,u.username,am.mode, (SELECT COUNT(*) FROM {$lp}product_assignments pa WHERE pa.user_id=u.id) AS cnt FROM {$lp}users u LEFT JOIN {$lp}assignment_modes am ON am.user_id=u.id");
+  $rows=array();
+  if($res){ while($r=$res->fetch_assoc()){ $rows[]=$r; } }
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  $ldb->close();
+  break;
+
+case 'get_assign_mode':
+  $uid = intval($_POST['user_id'] ?? 0);
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false)); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $row = null;
+  $res = $ldb->query("SELECT mode,quota_min,quota_max,category_id FROM {$lp}assignment_modes WHERE user_id=$uid");
+  if($res){ $row = $res->fetch_assoc(); }
+  echo json_encode(array('success'=>true,'data'=>$row));
+  $ldb->close();
+  break;
+
+case 'set_assign_mode':
+  $uid = intval($_POST['user_id'] ?? 0);
+  $mode = $_POST['mode'] ?? '';
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $stmt = $ldb->prepare("INSERT INTO {$lp}assignment_modes(user_id,mode,quota_min,quota_max,category_id) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE mode=VALUES(mode), quota_min=VALUES(quota_min), quota_max=VALUES(quota_max), category_id=VALUES(category_id)");
+  $qmin = intval($_POST['quota_min'] ?? 0);
+  $qmax = intval($_POST['quota_max'] ?? 0);
+  $cat = intval($_POST['category_id'] ?? 0);
+  $stmt->bind_param('isiii',$uid,$mode,$qmin,$qmax,$cat);
+  $ok = $stmt->execute();
+  $stmt->close();
+  $ldb->close();
+  echo json_encode(array('success'=>$ok));
+  break;
+
+case 'user_assignments':
+  $uid = intval($_POST['user_id'] ?? 0);
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $db = connect(); if(!$db) break;
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'data'=>array())); $db->close(); break; }
+  $wp = $_SESSION['db']['prefix'];
+  $lp = $_SESSION['logdb']['prefix'];
+  $res = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
+  $ids=array();
+  if($res){ while($r=$res->fetch_assoc()){ $ids[] = intval($r['product_id']); } }
+  $rows=array();
+  if($ids){
+    $idlist = implode(',',$ids);
+    $pres = $db->query("SELECT ID,post_title FROM {$wp}posts WHERE ID IN ($idlist)");
+    if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
+  }
+  $db->close();
+  $ldb->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  break;
+
+case 'remove_assignment':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $uid = intval($_POST['user_id'] ?? 0);
+  $pid = intval($_POST['product_id'] ?? 0);
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false)); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $stmt = $ldb->prepare("DELETE FROM {$lp}product_assignments WHERE user_id=? AND product_id=?");
+  $stmt->bind_param('ii',$uid,$pid);
+  $ok = $stmt->execute();
+  $stmt->close();
+  $ldb->close();
+  echo json_encode(array('success'=>$ok));
+  break;
+
+case 'transfer_assignment':
+  if(!has_perm('view_assignments')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  $pid = intval($_POST['product_id'] ?? 0);
+  $target = intval($_POST['target_user'] ?? 0);
+  $ldb = connect_local(); if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $check = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$pid");
+  if(!$check || !$check->num_rows){ echo json_encode(array('success'=>false,'message'=>'محصول یافت نشد')); $ldb->close(); break; }
+  $current = intval($check->fetch_assoc()['user_id']);
+  if($current == $target){ echo json_encode(array('success'=>true)); $ldb->close(); break; }
+  $stmt = $ldb->prepare("UPDATE {$lp}product_assignments SET user_id=? WHERE product_id=?");
+  $stmt->bind_param('ii',$target,$pid);
+  $ok = $stmt->execute();
+  $stmt->close();
+  $ldb->close();
+  echo json_encode(array('success'=>$ok));
+  break;
+case 'roles_list':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $res = $db->query("SELECT id,name,permissions FROM {$prefix}roles ORDER BY id ASC");
+  $rows = array();
+  if($res){ while($r=$res->fetch_assoc()){ $rows[]=$r; } }
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  $db->close();
+  break;
+case 'role_get':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $id = intval($_POST['id'] ?? 0);
+  $stmt = $db->prepare("SELECT id,name,permissions FROM {$prefix}roles WHERE id=?");
+  $stmt->bind_param('i',$id);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $row = $res ? $res->fetch_assoc() : null;
+  $stmt->close();
+  echo json_encode(array('success'=> $row?true:false,'data'=>$row));
+  $db->close();
+  break;
+case 'role_save':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $id = intval($_POST['id'] ?? 0);
+  $name = trim($_POST['name'] ?? '');
+  $perms = $_POST['permissions'] ?? '';
+  if(!$name){ echo json_encode(array('success'=>false,'message'=>'نام نقش الزامی است')); $db->close(); break; }
+  if($id==1){ $perms='all'; }
+  if($id){
+    $stmt = $db->prepare("UPDATE {$prefix}roles SET name=?,permissions=? WHERE id=?");
+    $stmt->bind_param('ssi',$name,$perms,$id);
+  }else{
+    $stmt = $db->prepare("INSERT INTO {$prefix}roles(name,permissions) VALUES (?,?)");
+    $stmt->bind_param('ss',$name,$perms);
+  }
+  $ok = $stmt->execute();
+  $stmt->close();
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  $db->close();
+  break;
+case 'role_delete':
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $id = intval($_POST['id'] ?? 0);
+  if($id==1){ echo json_encode(array('success'=>false,'message'=>'نقش مدیر کل قابل حذف نیست')); $db->close(); break; }
+  $stmt = $db->prepare("DELETE FROM {$prefix}roles WHERE id=?");
+  $stmt->bind_param('i',$id);
+  $ok = $stmt->execute();
+  $stmt->close();
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'حذف نشد'));
+  $db->close();
+  break;
 case 'list_products':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
-  $start = isset($_POST['start']) ? intval($_POST['start']) : 0;
-  $length = isset($_POST['length']) ? intval($_POST['length']) : 100;
-  $draw = isset($_POST['draw']) ? intval($_POST['draw']) : 0;
+  $perm = $_SESSION['permissions'] ?? '';
+  $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'";
+  if($perm !== 'all'){
+    $ldb = connect_local();
+    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+    $lp = $_SESSION['logdb']['prefix'];
+    $uid = intval($_SESSION['user_id']);
+    $ids = array();
+    $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
+    if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
+    $ldb->close();
+    if($ids){
+      $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE ID IN (".implode(',',$ids).")";
+    }
+    // اگر هیچ تخصیصی وجود نداشته باشد همه محصولات نمایش داده می‌شوند
+  }
   try{
-    $totalRes = $db->query("SELECT COUNT(*) c FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'");
-    $total = $totalRes ? intval($totalRes->fetch_assoc()['c']) : 0;
-    $sql = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE post_type='product' AND post_status='publish' LIMIT $start,$length";
-    $res = $db->query($sql);
+    $res = $db->query($query);
     if(!$res){ throw new Exception($db->error); }
     $rows = array();
     $scheme = isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http';
     $site = $scheme.'://'.$_SERVER['HTTP_HOST'];
     while($row = $res->fetch_assoc()){
         $id = $row['ID'];
-        $imgRes = $db->query(
-          "SELECT p2.guid FROM {$prefix}postmeta pm " .
-          "JOIN {$prefix}posts p2 ON p2.ID = pm.meta_value " .
-          "WHERE pm.post_id=$id AND pm.meta_key='_thumbnail_id' " .
-          "ORDER BY pm.meta_id DESC LIMIT 1"
-        );
+        $imgRes = $db->query("SELECT p2.guid FROM {$prefix}postmeta pm JOIN {$prefix}posts p2 ON p2.ID = pm.meta_value WHERE pm.post_id=$id AND pm.meta_key='_thumbnail_id' ORDER BY pm.meta_id DESC LIMIT 1");
         $imgRow = $imgRes ? $imgRes->fetch_assoc() : null; $image = ($imgRow && isset($imgRow['guid'])) ? $imgRow['guid'] : '';
         $priceRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_price'");
         $priceRow = $priceRes ? $priceRes->fetch_assoc() : null; $price = ($priceRow && isset($priceRow['meta_value'])) ? $priceRow['meta_value'] : '';
@@ -130,30 +927,22 @@ case 'list_products':
         $seoTitle='';$seoDesc='';
         if($metaRes){ while($m=$metaRes->fetch_assoc()){ if($m['meta_key']=='_yoast_wpseo_title') $seoTitle=$m['meta_value']; elseif($m['meta_key']=='_yoast_wpseo_metadesc') $seoDesc=$m['meta_value']; }}
         $score = compute_seo_score($seoTitle ?: $row['post_title'], $seoDesc, $row['post_content'], $row['post_title']);
-        $seoColor='secondary';
-        $seoText='ندارد';
-        if($row['post_content'] || $seoTitle || $seoDesc){
-          $seoText=$score;
-          if($score >= 70){ $seoColor='success'; }
-          elseif($score >= 40){ $seoColor='warning'; }
-          else { $seoColor='danger'; }
-        }
         $priceDisplay = ($price && $price !== '0') ? $price : 'بدون قیمت';
-        $stockDisplay = $stock=='instock' ? '<span class="badge bg-success">موجود</span>' : '<span class="badge bg-danger">ناموجود</span>';
+        $stockDisplay = $stock=='instock' ? 'موجود' : 'ناموجود';
         $productUrl = $site.'/product/'.$row['post_name'].'/';
         $rows[] = array(
-          '<img data-src="'.$image.'" width="50" height="50" class="lazy-img rounded" loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="">',
-          $row['post_title'],
-          $priceDisplay,
-          $stockDisplay,
-          '<span class="badge bg-'.$seoColor.'">'.$seoText.'</span>',
-          '<button class="btn btn-sm btn-primary edit" data-id="'.$id.'">ویرایش</button>',
-          '<a class="btn btn-sm btn-outline-secondary" href="'.$productUrl.'" target="_blank">نمایش</a>'
+          'id'=>$id,
+          'image'=>$image,
+          'name'=>$row['post_title'],
+          'price'=>$priceDisplay,
+          'stock'=>$stockDisplay,
+          'seo'=>$score,
+          'link'=>$productUrl
         );
     }
-    echo json_encode(array('draw'=>$draw,'recordsTotal'=>$total,'recordsFiltered'=>$total,'data'=>$rows));
+    echo json_encode(array('success'=>true,'data'=>$rows));
   }catch(Exception $e){
-    echo json_encode(array('draw'=>$draw,'recordsTotal'=>0,'recordsFiltered'=>0,'data'=>array(),'error'=>$e->getMessage()));
+    echo json_encode(array('success'=>false,'message'=>$e->getMessage()));
   }finally{
     $db->close();
   }
@@ -162,6 +951,18 @@ case 'get_product':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
   $id = intval($_POST['id']);
+  $perm = $_SESSION['permissions'] ?? '';
+  if($perm !== 'all'){
+    $ldb = connect_local();
+    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+    $lp = $_SESSION['logdb']['prefix'];
+    $uid = intval($_SESSION['user_id']);
+    $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
+    $allowed = ($check && $check->num_rows>0);
+    $check && $check->close();
+    $ldb->close();
+    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  }
   $pRes = $db->query("SELECT post_title,post_content,post_name FROM {$prefix}posts WHERE ID=$id");
   $p = $pRes ? $pRes->fetch_assoc() : null;
   if(!$p){ echo json_encode(array('success'=>false,'message'=>'محصول یافت نشد')); break; }
@@ -247,8 +1048,21 @@ case 'save_product':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
   $id = intval($_POST['id']);
+  $perm = $_SESSION['permissions'] ?? '';
+  if($perm !== 'all'){
+    $ldb = connect_local();
+    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+    $lp = $_SESSION['logdb']['prefix'];
+    $uid = intval($_SESSION['user_id']);
+    $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
+    $allowed = ($check && $check->num_rows>0);
+    $check && $check->close();
+    $ldb->close();
+    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  }
   $name = $db->real_escape_string($_POST['name']);
   $slug = $db->real_escape_string($_POST['slug']);
+  $old_slug = isset($_POST['old_slug']) ? $db->real_escape_string($_POST['old_slug']) : '';
   $desc = $db->real_escape_string($_POST['description']);
   $price = $db->real_escape_string($_POST['price']);
   $stock = $db->real_escape_string($_POST['stock_status']);
@@ -291,12 +1105,101 @@ case 'save_product':
        }
      }
   }
+  $redirect_success = false;
+  if($old_slug && $old_slug !== $slug){
+    $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
+    if($check && $check->num_rows){
+      $oldPath = '/product/'.$old_slug.'/';
+      $newPath = '/product/'.$slug.'/';
+      if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
+        $redirect_success = true;
+      }
+    }
+  }
+  echo json_encode(array('success'=>true,'redirect'=>$redirect_success));
+  $db->close();
+  break;
+
+case 'bulk_stock':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $status = ($_POST['status'] ?? '') === 'instock' ? 'instock' : 'outofstock';
+  $db->query("UPDATE {$prefix}postmeta SET meta_value='$status' WHERE meta_key='_stock_status'");
+  $db->query("INSERT INTO {$prefix}postmeta (post_id,meta_key,meta_value) SELECT ID,'_stock_status','$status' FROM {$prefix}posts p WHERE p.post_type='product' AND NOT EXISTS (SELECT 1 FROM {$prefix}postmeta pm WHERE pm.post_id=p.ID AND pm.meta_key='_stock_status')");
   echo json_encode(array('success'=>true));
   $db->close();
   break;
- case 'analytics':
+
+case 'bulk_price':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
+  $op = ($_POST['op'] ?? '') === 'dec' ? '-' : '+';
+  $type = ($_POST['type'] ?? '') === 'fixed' ? 'fixed' : 'percent';
+  $val = isset($_POST['value']) ? floatval($_POST['value']) : 0;
+  if($val==0){ echo json_encode(array('success'=>false,'message'=>'مقدار نامعتبر')); $db->close(); break; }
+  if($type==='percent'){
+    $factor = $op==='+' ? (1 + $val/100) : (1 - $val/100);
+    $db->query("UPDATE {$prefix}postmeta SET meta_value=ROUND(CAST(meta_value AS DECIMAL(10,2))*$factor,2) WHERE meta_key IN ('_price','_regular_price')");
+  }else{
+    $sign = $op==='+' ? '+' : '-';
+    $db->query("UPDATE {$prefix}postmeta SET meta_value=ROUND(CAST(meta_value AS DECIMAL(10,2)) $sign $val,2) WHERE meta_key IN ('_price','_regular_price')");
+  }
+  echo json_encode(array('success'=>true));
+  $db->close();
+  break;
+
+case 'bulk_seo_keywords':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $hasIndexTable = $db->query("SHOW TABLES LIKE '{$prefix}yoast_indexable'");
+  $updateIndex = $hasIndexTable && $hasIndexTable->num_rows > 0;
+  $products = $db->query("SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product'");
+  $ok=array();$fail=array();
+  if($products){
+    while($p=$products->fetch_assoc()){
+      $id = intval($p['ID']);
+      $title = $db->real_escape_string($p['post_title']);
+      $del = $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_focuskw','_yoast_wpseo_focuskw_text')");
+      $ins = $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_focuskw','$title'),($id,'_yoast_wpseo_focuskw_text','$title')");
+      $idx=true;
+      if($updateIndex){
+        $idx = $db->query("UPDATE {$prefix}yoast_indexable SET primary_focus_keyword='$title' WHERE object_id=$id AND object_type='post'");
+      }
+      if($del && $ins && $idx){ $ok[]=$p['post_title']; } else { $fail[]=$p['post_title']; }
+    }
+  }
+  echo json_encode(array('success'=>true,'report'=>array('ok'=>$ok,'fail'=>$fail)));
+  $db->close();
+  break;
+
+case 'bulk_seo_desc':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $hasIndexTable = $db->query("SHOW TABLES LIKE '{$prefix}yoast_indexable'");
+  $updateIndex = $hasIndexTable && $hasIndexTable->num_rows > 0;
+  $products = $db->query("SELECT ID,post_title FROM {$prefix}posts WHERE post_type='product'");
+  $ok=array();$fail=array();
+  if($products){
+    while($p=$products->fetch_assoc()){
+      $id = intval($p['ID']);
+      $title = $db->real_escape_string($p['post_title']);
+      $desc  = $db->real_escape_string("خرید $title با بهترین قیمت از فروشگاه ما.");
+      $del = $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_metadesc'");
+      $ins = $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metadesc','$desc')");
+      $idx=true;
+      if($updateIndex){
+        $idx = $db->query("UPDATE {$prefix}yoast_indexable SET description='$desc' WHERE object_id=$id AND object_type='post'");
+      }
+      if($del && $ins && $idx){ $ok[]=$p['post_title']; } else { $fail[]=$p['post_title']; }
+    }
+  }
+  echo json_encode(array('success'=>true,'report'=>array('ok'=>$ok,'fail'=>$fail)));
+  $db->close();
+  break;
+
+  case 'analytics':
+   $db = connect(); if(!$db) break;
+   $prefix = $_SESSION['db']['prefix'];
   $catRes = $db->query("SELECT COALESCE(pt.name,t.name) name,COUNT(tr.object_id) c FROM {$prefix}terms t JOIN {$prefix}term_taxonomy tt ON t.term_id=tt.term_id LEFT JOIN {$prefix}term_taxonomy ptt ON tt.parent=ptt.term_taxonomy_id LEFT JOIN {$prefix}terms pt ON ptt.term_id=pt.term_id JOIN {$prefix}term_relationships tr ON tr.term_taxonomy_id=tt.term_taxonomy_id WHERE tt.taxonomy='product_cat' GROUP BY name");
   $cat = array('labels'=>array(),'data'=>array());
   if($catRes){ while($r=$catRes->fetch_assoc()){ $cat['labels'][]=$r['name']; $cat['data'][]=$r['c']; }}
@@ -339,10 +1242,15 @@ default:
 
 function connect(){
   if(!isset($_SESSION['db'])){
-    echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده'));
-    return false;
+    $cfg = secure_load_config();
+    if(!$cfg){
+      echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده'));
+      return false;
+    }
+    $_SESSION['db'] = $cfg;
+  } else {
+    $cfg = $_SESSION['db'];
   }
-  $cfg = $_SESSION['db'];
   try{
     $mysqli = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']);
   }catch(mysqli_sql_exception $e){
@@ -358,24 +1266,112 @@ function connect(){
 }
 
 function secure_save_config($data){
-  if(!isset($_SESSION['token'])) return;
-  $key = hash('sha256', $_SESSION['token'], true);
-  $iv = random_bytes(16);
   $json = json_encode($data);
-  $enc = openssl_encrypt($json, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-  file_put_contents(__DIR__.'/config.secure', base64_encode($iv.$enc));
+  file_put_contents(__DIR__.'/config.secure', $json);
 }
 
 function secure_load_config(){
-  if(!isset($_SESSION['token'])) return false;
   $path = __DIR__.'/config.secure';
   if(!file_exists($path)) return false;
-  $raw = base64_decode(file_get_contents($path));
-  $iv = substr($raw,0,16);
-  $enc = substr($raw,16);
-  $key = hash('sha256', $_SESSION['token'], true);
-  $json = openssl_decrypt($enc, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+  $json = file_get_contents($path);
   return $json ? json_decode($json,true) : false;
+}
+
+function connect_local(){
+  if(!isset($_SESSION['logdb'])){
+    $cfg = secure_load_local_config();
+    if(!$cfg) return false;
+    $_SESSION['logdb'] = $cfg;
+  } else {
+    $cfg = $_SESSION['logdb'];
+  }
+  try{ $mysqli = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+  catch(mysqli_sql_exception $e){ return false; }
+  if($mysqli->connect_errno) return false;
+  $mysqli->set_charset('utf8mb4');
+  init_local_tables($mysqli,$cfg['prefix']);
+  return $mysqli;
+}
+
+function init_local_tables($db,$prefix){
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}logs (id INT AUTO_INCREMENT PRIMARY KEY, action VARCHAR(20), ip VARCHAR(45), ts DATETIME)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}roles (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, permissions TEXT)");
+  $db->query("INSERT INTO {$prefix}roles(id,name,permissions) VALUES (1,'مدیر کل','all') ON DUPLICATE KEY UPDATE name='مدیر کل', permissions='all'");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(191) UNIQUE, password_hash VARCHAR(255) NOT NULL, full_name VARCHAR(191), phone_number VARCHAR(20), role_id INT, status VARCHAR(20) DEFAULT 'active', created_at DATETIME, updated_at DATETIME, FOREIGN KEY (role_id) REFERENCES {$prefix}roles(id))");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}sessions (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, token VARCHAR(255), ip_address VARCHAR(45), device_info VARCHAR(191), expires_at DATETIME, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}clients (id INT AUTO_INCREMENT PRIMARY KEY, client_name VARCHAR(191), api_key VARCHAR(191), client_secret VARCHAR(191), redirect_uri TEXT, status VARCHAR(20))");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}user_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, action VARCHAR(50), timestamp DATETIME, ip_address VARCHAR(45), country VARCHAR(100), city VARCHAR(100), isp VARCHAR(191), FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_assignments (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, product_id BIGINT, assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY product_unique (product_id), KEY user_idx (user_id))");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}assignment_modes (user_id INT PRIMARY KEY, mode VARCHAR(20), quota_min INT, quota_max INT, category_id BIGINT, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}password_resets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, reset_token VARCHAR(255), expires_at DATETIME, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}settings (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, value TEXT)");
+
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}products_seo (product_id INT PRIMARY KEY, product_name VARCHAR(255), category_id INT, impressions INT DEFAULT 0, clicks INT DEFAULT 0, ctr FLOAT DEFAULT 0, avg_position FLOAT DEFAULT 0, indexed_status ENUM('indexed','noindex','blocked','canonical_error') DEFAULT 'indexed', last_updated DATETIME)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_keywords (id INT AUTO_INCREMENT PRIMARY KEY, product_id INT, keyword VARCHAR(255), impressions INT DEFAULT 0, clicks INT DEFAULT 0, ctr FLOAT DEFAULT 0, avg_position FLOAT DEFAULT 0, last_updated DATETIME, FOREIGN KEY (product_id) REFERENCES {$prefix}products_seo(product_id) ON DELETE CASCADE)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_trends (id INT AUTO_INCREMENT PRIMARY KEY, product_id INT, date DATE, impressions INT DEFAULT 0, clicks INT DEFAULT 0, ctr FLOAT DEFAULT 0, avg_position FLOAT DEFAULT 0, FOREIGN KEY (product_id) REFERENCES {$prefix}products_seo(product_id) ON DELETE CASCADE)");
+}
+
+function get_setting($db,$prefix,$name){
+  $stmt = $db->prepare("SELECT value FROM {$prefix}settings WHERE name=?");
+  if(!$stmt) return null;
+  $stmt->bind_param('s',$name);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $row = $res ? $res->fetch_assoc() : null;
+  $stmt->close();
+  return $row ? $row['value'] : null;
+}
+
+function save_setting($db,$prefix,$name,$value){
+  $stmt = $db->prepare("INSERT INTO {$prefix}settings(name,value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)");
+  if(!$stmt) return false;
+  $stmt->bind_param('ss',$name,$value);
+  $ok = $stmt->execute();
+  $stmt->close();
+  return $ok;
+}
+
+function secure_save_local_config($data){
+  $json = json_encode($data);
+  file_put_contents(__DIR__.'/local_config.secure', $json);
+}
+
+function secure_load_local_config(){
+  $path = __DIR__.'/local_config.secure';
+  if(!file_exists($path)) return false;
+  $json = file_get_contents($path);
+  return $json ? json_decode($json,true) : false;
+}
+
+function log_event($action){
+  $db = connect_local();
+  if(!$db) return;
+  $prefix = $_SESSION['logdb']['prefix'];
+  $ip = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+  $uid = isset($_SESSION['user_id']) ? intval($_SESSION['user_id']) : 0;
+  $dt = new DateTime('now', new DateTimeZone('Asia/Tehran'));
+  $ts = $dt->format('Y-m-d H:i:s');
+  $geo = array('country'=>'','city'=>'','isp'=>'');
+  $key = get_setting($db,$prefix,'ipify_key');
+  if($key){
+    $url = "https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$ip}";
+    $resp = @file_get_contents($url);
+    if($resp){
+      $data = json_decode($resp,true);
+      if($data){
+        $geo['country'] = $data['location']['country'] ?? '';
+        $geo['city'] = $data['location']['city'] ?? '';
+        $geo['isp'] = $data['isp'] ?? '';
+      }
+    }
+  }
+  $stmt = $db->prepare("INSERT INTO {$prefix}user_logs(user_id, action, ip_address, country, city, isp, timestamp) VALUES (?,?,?,?,?,?,?)");
+  if($stmt){
+    $stmt->bind_param('issssss',$uid,$action,$ip,$geo['country'],$geo['city'],$geo['isp'],$ts);
+    $stmt->execute();
+    $stmt->close();
+  }
+  $db->close();
 }
 
 function compute_seo_score($title,$meta,$content,$keyword){
