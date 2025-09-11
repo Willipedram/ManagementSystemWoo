@@ -85,38 +85,19 @@ CREATE TABLE IF NOT EXISTS msw_settings (
   value TEXT
 );
 
--- Product-level SEO tables
-CREATE TABLE IF NOT EXISTS msw_products_seo (
-  product_id INT PRIMARY KEY,
-  product_name VARCHAR(255),
-  category_id INT,
-  impressions INT DEFAULT 0,
-  clicks INT DEFAULT 0,
-  ctr FLOAT DEFAULT 0,
-  avg_position FLOAT DEFAULT 0,
-  indexed_status ENUM('indexed','noindex','blocked','canonical_error') DEFAULT 'indexed',
-  last_updated DATETIME
+CREATE TABLE IF NOT EXISTS msw_product_content_history (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  product_id BIGINT,
+  old_content LONGTEXT,
+  new_content LONGTEXT,
+  changed_by INT,
+  changed_at DATETIME,
+  version INT,
+  FOREIGN KEY (changed_by) REFERENCES msw_users(id) ON DELETE SET NULL
 );
-
-CREATE TABLE IF NOT EXISTS msw_product_keywords (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  product_id INT,
-  keyword VARCHAR(255),
-  impressions INT DEFAULT 0,
-  clicks INT DEFAULT 0,
-  ctr FLOAT DEFAULT 0,
-  avg_position FLOAT DEFAULT 0,
-  last_updated DATETIME,
-  FOREIGN KEY (product_id) REFERENCES msw_products_seo(product_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS msw_product_trends (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  product_id INT,
-  date DATE,
-  impressions INT DEFAULT 0,
-  clicks INT DEFAULT 0,
-  ctr FLOAT DEFAULT 0,
-  avg_position FLOAT DEFAULT 0,
-  FOREIGN KEY (product_id) REFERENCES msw_products_seo(product_id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS msw_product_seo_scores (
+  product_id BIGINT PRIMARY KEY,
+  score INT,
+  details LONGTEXT,
+  analyzed_at DATETIME
 );
