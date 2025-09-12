@@ -5,6 +5,11 @@ header('Content-Type: application/json; charset=utf-8');
 $configFile = __DIR__.'/config.secure';
 require_once __DIR__.'/prompt_template.php';
 require_once __DIR__.'/classes/UserManager.php';
+require_once __DIR__.'/classes/SanctionBypassManager.php';
+require_once __DIR__.'/classes/ChatGPTManager.php';
+require_once __DIR__.'/classes/SEOAnalyzer.php';
+require_once __DIR__.'/classes/ProcessManager.php';
+require_once __DIR__.'/classes/ProcessQueue.php';
 $action = isset($_POST['action']) ? $_POST['action'] : '';
 
 function has_perm($p){
@@ -78,141 +83,6 @@ case 'db_connect':
     $mysqli->close();
     secure_save_config($_SESSION['db']);
     echo json_encode(array('success'=>true));
-  }
-  break;
-case 'update_product_seo':
-  $ldb = connect_local();
-  $db  = connect();
-  if(!$ldb || !$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده')); if($ldb) $ldb->close(); if($db) $db->close(); break; }
-  $lp = $_SESSION['logdb']['prefix'];
-  $wp = $_SESSION['db']['prefix'];
-  $cid = get_setting($ldb,$lp,'sc_client_id');
-  $secret = get_setting($ldb,$lp,'sc_client_secret');
-  $refresh = get_setting($ldb,$lp,'sc_refresh_token');
-  $site = get_setting($ldb,$lp,'sc_site');
-  if(!$cid || !$secret || !$refresh || !$site){ echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است')); $ldb->close(); $db->close(); break; }
-  $ch = curl_init('https://oauth2.googleapis.com/token');
-  curl_setopt_array($ch,array(CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>http_build_query(array('client_id'=>$cid,'client_secret'=>$secret,'refresh_token'=>$refresh,'grant_type'=>'refresh_token')),CURLOPT_RETURNTRANSFER=>true));
-  $tok = curl_exec($ch); $tok = $tok?json_decode($tok,true):array();
-  $acc = $tok['access_token'] ?? '';
-  if(!$acc){ echo json_encode(array('success'=>false,'message'=>'token missing')); $ldb->close(); $db->close(); break; }
-  $payload = json_encode(array('startDate'=>date('Y-m-d',strtotime('-1 day')),'endDate'=>date('Y-m-d'),'dimensions'=>array('page','query'),'rowLimit'=>1000));
-  $ch = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
-  curl_setopt_array($ch,array(CURLOPT_POST=>true,CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),CURLOPT_POSTFIELDS=>$payload,CURLOPT_RETURNTRANSFER=>true));
-  $resp = curl_exec($ch); $http = curl_getinfo($ch,CURLINFO_HTTP_CODE);
-  if($resp === false || $http != 200){ $msg='API error'; if($resp){$tmp=json_decode($resp,true); $msg=$tmp['error']['message']??$msg;} echo json_encode(array('success'=>false,'message'=>$msg)); $ldb->close(); $db->close(); break; }
-  $rows = json_decode($resp,true)['rows'] ?? array();
-  $insSeo = $ldb->prepare("INSERT INTO {$lp}products_seo(product_id,product_name,category_id,impressions,clicks,ctr,avg_position,indexed_status,last_updated) VALUES(?,?,?,?,?,?,?,'indexed',NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),last_updated=NOW()");
-  $insKw = $ldb->prepare("INSERT INTO {$lp}product_keywords(product_id,keyword,impressions,clicks,ctr,avg_position,last_updated) VALUES(?,?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE impressions=VALUES(impressions),clicks=VALUES(clicks),ctr=VALUES(ctr),avg_position=VALUES(avg_position),last_updated=NOW()");
-  $insTr = $ldb->prepare("INSERT INTO {$lp}product_trends(product_id,date,impressions,clicks,ctr,avg_position) VALUES(?,?,?,?,?,?)");
-  foreach($rows as $r){
-    $page = $r['keys'][0] ?? '';
-    $kw = $r['keys'][1] ?? '';
-    $clicks = $r['clicks'] ?? 0;
-    $impr = $r['impressions'] ?? 0;
-    $ctr = $impr ? ($clicks/$impr) : 0;
-    $pos = $r['position'] ?? 0;
-    $path = parse_url($page,PHP_URL_PATH);
-    $slug = trim(basename($path),'/');
-    $stmt = $db->prepare("SELECT ID,post_title FROM {$wp}posts WHERE post_name=? AND post_type='product' LIMIT 1");
-    $stmt->bind_param('s',$slug);
-    $stmt->execute();
-    $resP = $stmt->get_result();
-    $prod = $resP ? $resP->fetch_assoc() : null;
-    $stmt->close();
-    if(!$prod) continue;
-    $pid = intval($prod['ID']);
-    $pname = $prod['post_title'];
-    $catId = 0;
-    $stmt = $db->prepare("SELECT t.term_id FROM {$wp}term_relationships tr JOIN {$wp}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id JOIN {$wp}terms t ON tt.term_id=t.term_id WHERE tr.object_id=? AND tt.taxonomy='product_cat' LIMIT 1");
-    $stmt->bind_param('i',$pid);
-    $stmt->execute();
-    $resC = $stmt->get_result();
-    if($rowC = $resC->fetch_assoc()) $catId = intval($rowC['term_id']);
-    $stmt->close();
-    $insSeo->bind_param('isiiidd',$pid,$pname,$catId,$impr,$clicks,$ctr,$pos);
-    $insSeo->execute();
-    $insKw->bind_param('isiiidd',$pid,$kw,$impr,$clicks,$ctr,$pos);
-    $insKw->execute();
-    $insTr->bind_param('iiiddd',$pid,date('Y-m-d'),$impr,$clicks,$ctr,$pos);
-    $insTr->execute();
-  }
-  $insSeo->close(); $insKw->close(); $insTr->close();
-  $db->close(); $ldb->close();
-  echo json_encode(array('success'=>true));
-  break;
-case 'fetch_product_seo':
-  $steps=array();
-  $ldb = connect_local();
-  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال پایگاه داده سامانه','steps'=>$steps)); break; }
-  $steps[]='local db connected';
-  $db = connect();
-  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال پایگاه ووکامرس','steps'=>$steps)); $ldb->close(); break; }
-  $steps[]='woocommerce db connected';
-  $lp = $_SESSION['logdb']['prefix'];
-  $wp = $_SESSION['db']['prefix'];
-  $from = $_POST['from'] ?? '';
-  $to = $_POST['to'] ?? '';
-  $query = $_POST['query'] ?? '';
-  $whereKw = "";
-  $paramsKw = array();
-  if($query !== ''){ $whereKw .= " AND keyword LIKE ?"; $paramsKw[] = "%{$query}%"; }
-  $dateCond = "";
-  if($from && $to){
-    $dateCond = " AND last_updated BETWEEN ? AND ?";
-    $paramsKw[] = $from; $paramsKw[] = $to;
-  }
-  $products = array();
-  $coverage = array('indexed'=>0,'noindex'=>0,'blocked'=>0,'canonical_error'=>0);
-  $res = ($from && $to)
-    ? $ldb->query("SELECT * FROM {$lp}products_seo WHERE last_updated BETWEEN '{$from}' AND '{$to}'")
-    : $ldb->query("SELECT * FROM {$lp}products_seo");
-  if($res){
-    while($row = $res->fetch_assoc()){
-      $pid = intval($row['product_id']);
-      $catName = '';
-      $stmt = $db->prepare("SELECT t.name FROM {$wp}term_relationships tr JOIN {$wp}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id JOIN {$wp}terms t ON tt.term_id=t.term_id WHERE tr.object_id=? AND tt.taxonomy='product_cat' LIMIT 1");
-      $stmt->bind_param('i',$pid);
-      $stmt->execute();
-      $resC = $stmt->get_result();
-      if($rowC = $resC->fetch_assoc()) $catName = $rowC['name'];
-      $stmt->close();
-      $row['category'] = $catName;
-      $products[] = $row;
-      if(isset($coverage[$row['indexed_status']])) $coverage[$row['indexed_status']]++;
-    }
-    $steps[]='products loaded: '.count($products);
-  } else { $steps[]='products query failed'; }
-  $keywords = array();
-  $sqlKw = "SELECT product_id,keyword,clicks,impressions,ctr FROM {$lp}product_keywords WHERE 1 {$whereKw}{$dateCond} LIMIT 100";
-  if($stmtk = $ldb->prepare($sqlKw)){
-    if(count($paramsKw)==1){ $stmtk->bind_param('s',$paramsKw[0]); }
-    elseif(count($paramsKw)==2){ $stmtk->bind_param('ss',$paramsKw[0],$paramsKw[1]); }
-    elseif(count($paramsKw)==3){ $stmtk->bind_param('sss',$paramsKw[0],$paramsKw[1],$paramsKw[2]); }
-    $stmtk->execute();
-    $resk = $stmtk->get_result();
-    while($k=$resk->fetch_assoc()) $keywords[]=$k;
-    $stmtk->close();
-    $steps[]='keywords loaded: '.count($keywords);
-  } else { $steps[]='keywords query failed'; }
-  $trends = array();
-  if($from && $to){
-    $rest = $ldb->prepare("SELECT product_id,date,avg_position,ctr FROM {$lp}product_trends WHERE date BETWEEN ? AND ?");
-    $rest->bind_param('ss',$from,$to);
-    $rest->execute();
-    $rt = $rest->get_result();
-    while($t=$rt->fetch_assoc()) $trends[]=$t;
-    $rest->close();
-  } else {
-    $rest = $ldb->query("SELECT product_id,date,avg_position,ctr FROM {$lp}product_trends WHERE date>=DATE_SUB(CURDATE(),INTERVAL 90 DAY)");
-    if($rest){ while($t=$rest->fetch_assoc()) $trends[]=$t; }
-  }
-  $steps[]='trends loaded: '.count($trends);
-  $db->close(); $ldb->close();
-  if(empty($products) && empty($keywords) && empty($trends)){
-    echo json_encode(array('success'=>false,'message'=>'هیچ داده‌ای یافت نشد','steps'=>$steps));
-  }else{
-    echo json_encode(array('success'=>true,'products'=>$products,'keywords'=>$keywords,'trends'=>$trends,'coverage'=>$coverage,'steps'=>$steps));
   }
   break;
 case 'load_saved_config':
@@ -384,6 +254,9 @@ case 'fetch_search_console':
   $from = $_POST['from'] ?? date('Y-m-d',strtotime('-3 months'));
   $to = $_POST['to'] ?? date('Y-m-d');
   $query = $_POST['query'] ?? '';
+  $device = $_POST['device'] ?? '';
+  $country = $_POST['country'] ?? '';
+  $dimension = $_POST['dimension'] ?? 'query';
   $ldb->close();
   if(!$cid || !$secret || !$refresh || !$site){
     echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است')); break;
@@ -407,14 +280,15 @@ case 'fetch_search_console':
   $payloadArr = array(
     'startDate'=>$from,
     'endDate'=>$to,
-    'dimensions'=>array('query'),
+    'dimensions'=>array($dimension),
     'rowLimit'=>250
   );
-  if($query !== ''){
-    $payloadArr['dimensionFilterGroups']=array(array(
-      'groupType'=>'and',
-      'filters'=>array(array('dimension'=>'query','operator'=>'contains','expression'=>$query))
-    ));
+  $filters=array();
+  if($query !== ''){ $filters[] = array('dimension'=>$dimension,'operator'=>'contains','expression'=>$query); }
+  if($device !== ''){ $filters[] = array('dimension'=>'device','operator'=>'equals','expression'=>$device); }
+  if($country !== ''){ $filters[] = array('dimension'=>'country','operator'=>'equals','expression'=>$country); }
+  if($filters){
+    $payloadArr['dimensionFilterGroups']=array(array('groupType'=>'and','filters'=>$filters));
   }
   $payload = json_encode($payloadArr);
   $ch = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
@@ -437,17 +311,50 @@ case 'fetch_search_console':
   $data = array();
   foreach($rows as $r){
     $data[] = array(
-      'query'=>$r['keys'][0] ?? '',
+      'key'=>$r['keys'][0] ?? '',
       'clicks'=>$r['clicks'] ?? 0,
       'impressions'=>$r['impressions'] ?? 0,
-      'ctr'=>isset($r['ctr'])?round($r['ctr']*100,2).'%' : '0%',
+      'ctr'=>isset($r['ctr'])?round($r['ctr']*100,2) : 0,
       'position'=>$r['position'] ?? 0
     );
   }
-  if(empty($data)){
+  // second request for daily metrics
+  $payload2 = json_encode(array(
+    'startDate'=>$from,
+    'endDate'=>$to,
+    'dimensions'=>array('date'),
+    'rowLimit'=>250,
+    'dimensionFilterGroups'=>$filters?array(array('groupType'=>'and','filters'=>$filters)):null
+  ));
+  $ch2 = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
+  curl_setopt_array($ch2,array(
+    CURLOPT_POST=>true,
+    CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),
+    CURLOPT_POSTFIELDS=>$payload2,
+    CURLOPT_RETURNTRANSFER=>true
+  ));
+  $resp2 = curl_exec($ch2);
+  $http2 = curl_getinfo($ch2,CURLINFO_HTTP_CODE);
+  $resp2 = json_decode($resp2,true);
+  $dateRows = $resp2['rows'] ?? array();
+  $dates = array();
+  $sumClicks = 0; $sumImpr = 0; $sumPosWeighted = 0;
+  foreach($dateRows as $r){
+    $clicks=$r['clicks'] ?? 0;
+    $impr=$r['impressions'] ?? 0;
+    $ctr=$impr>0?round($clicks/$impr*100,2):0;
+    $pos=$r['position'] ?? 0;
+    $dates[] = array('date'=>$r['keys'][0] ?? '', 'clicks'=>$clicks, 'impressions'=>$impr, 'ctr'=>$ctr, 'position'=>$pos);
+    $sumClicks += $clicks;
+    $sumImpr += $impr;
+    $sumPosWeighted += $pos*$impr;
+  }
+  if(empty($data) && empty($dates)){
     echo json_encode(array('success'=>false,'message'=>'داده‌ای برای بازه زمانی انتخاب نشده'));
   }else{
-    echo json_encode(array('success'=>true,'data'=>$data));
+    $avgCtr = $sumImpr>0?round($sumClicks/$sumImpr*100,2):0;
+    $avgPos = $sumImpr>0?round($sumPosWeighted/$sumImpr,2):0;
+    echo json_encode(array('success'=>true,'data'=>array('rows'=>$data,'dates'=>$dates,'summary'=>array('clicks'=>$sumClicks,'impressions'=>$sumImpr,'ctr'=>$avgCtr,'position'=>$avgPos))));
   }
   break;
 case 'load_api_settings':
@@ -915,6 +822,14 @@ case 'list_products':
     $rows = array();
     $scheme = isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http';
     $site = $scheme.'://'.$_SERVER['HTTP_HOST'];
+    $scores = array();
+    $ldb = connect_local();
+    if($ldb){
+      $lp = $_SESSION['logdb']['prefix'];
+      $scRes = $ldb->query("SELECT product_id,score FROM {$lp}product_seo_scores");
+      if($scRes){ while($sc=$scRes->fetch_assoc()){ $scores[intval($sc['product_id'])]=intval($sc['score']); } $scRes->close(); }
+      $ldb->close();
+    }
     while($row = $res->fetch_assoc()){
         $id = $row['ID'];
         $imgRes = $db->query("SELECT p2.guid FROM {$prefix}postmeta pm JOIN {$prefix}posts p2 ON p2.ID = pm.meta_value WHERE pm.post_id=$id AND pm.meta_key='_thumbnail_id' ORDER BY pm.meta_id DESC LIMIT 1");
@@ -923,20 +838,16 @@ case 'list_products':
         $priceRow = $priceRes ? $priceRes->fetch_assoc() : null; $price = ($priceRow && isset($priceRow['meta_value'])) ? $priceRow['meta_value'] : '';
         $stockRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_stock_status'");
         $stockRow = $stockRes ? $stockRes->fetch_assoc() : null; $stock = ($stockRow && isset($stockRow['meta_value'])) ? $stockRow['meta_value'] : 'instock';
-        $metaRes = $db->query("SELECT meta_key,meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_title','_yoast_wpseo_metadesc')");
-        $seoTitle='';$seoDesc='';
-        if($metaRes){ while($m=$metaRes->fetch_assoc()){ if($m['meta_key']=='_yoast_wpseo_title') $seoTitle=$m['meta_value']; elseif($m['meta_key']=='_yoast_wpseo_metadesc') $seoDesc=$m['meta_value']; }}
-        $score = compute_seo_score($seoTitle ?: $row['post_title'], $seoDesc, $row['post_content'], $row['post_title']);
         $priceDisplay = ($price && $price !== '0') ? $price : 'بدون قیمت';
         $stockDisplay = $stock=='instock' ? 'موجود' : 'ناموجود';
-        $productUrl = $site.'/product/'.$row['post_name'].'/';
+        $productUrl = rtrim($site,'/').'/'.$row['post_name'].'/';
         $rows[] = array(
           'id'=>$id,
           'image'=>$image,
           'name'=>$row['post_title'],
           'price'=>$priceDisplay,
           'stock'=>$stockDisplay,
-          'seo'=>$score,
+          'score'=> isset($scores[$id]) ? $scores[$id] : null,
           'link'=>$productUrl
         );
     }
@@ -997,10 +908,10 @@ case 'get_product':
   $imgRes = $db->query("SELECT p2.guid FROM {$prefix}postmeta pm JOIN {$prefix}posts p2 ON p2.ID = pm.meta_value WHERE pm.post_id=$id AND pm.meta_key='_thumbnail_id' ORDER BY pm.meta_id DESC LIMIT 1");
   $imgRow = $imgRes ? $imgRes->fetch_assoc() : null; $image = ($imgRow && isset($imgRow['guid'])) ? $imgRow['guid'] : '';
   $categoryUrl = '';
-  if(!empty($selected)){ $categoryUrl = $site.'/product-category/'.$selected[0]['slug'].'/'; }
-  $productUrl = $site.'/product/'.$p['post_name'].'/';
+  if(!empty($selected)){ $categoryUrl = rtrim($site,'/').'/'.$selected[0]['slug'].'/'; }
+  $productUrl = rtrim($site,'/').'/'.$p['post_name'].'/';
   $categoriesList = implode('، ', array_column($selected,'name'));
-  $catLinksHtml = '<ul>'; foreach($selected as $c){ $catLinksHtml.='<li><a href="'.$site.'/product-category/'.$c['slug'].'/">'.$c['name'].'</a></li>'; } $catLinksHtml.='</ul>';
+  $catLinksHtml = '<ul>'; foreach($selected as $c){ $catLinksHtml.='<li><a href="'.rtrim($site,'/').'/'.$c['slug'].'/">'.$c['name'].'</a></li>'; } $catLinksHtml.='</ul>';
   $internal1 = $site; $internal2 = $categoryUrl ?: $site;
   $external1='https://fa.wikipedia.org'; $external2='https://www.google.com'; $shippingNotes='';
   $seo_prompt = build_prompt(array(
@@ -1029,7 +940,7 @@ case 'get_product':
     '{{RELATED_TOPIC_1}}'=>'',
     '{{RELATED_TOPIC_2}}'=>''
   ));
-  $seoScore = compute_seo_score($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $p['post_title']);
+  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $primaryKeyword ?: $p['post_title']);
   echo json_encode(array(
     'success'=>true,
     'product'=>array('id'=>$id,'name'=>$p['post_title'],'slug'=>$p['post_name'],'description'=>$p['post_content'],'price'=>$price),
@@ -1037,7 +948,8 @@ case 'get_product':
     'seo_prompt'=>$seo_prompt,
     'seo_title'=>$seoTitle,
     'seo_desc'=>$seoDesc,
-    'seo_score'=>$seoScore,
+    'seo_score'=>$analysis['score'],
+    'seo_details'=>$analysis['details'],
     'focus_keyword'=>$primaryKeyword,
     'stock_status'=>$stock,
     'product_url'=>$productUrl
@@ -1066,6 +978,9 @@ case 'save_product':
   $desc = $db->real_escape_string($_POST['description']);
   $price = $db->real_escape_string($_POST['price']);
   $stock = $db->real_escape_string($_POST['stock_status']);
+  $oldRes = $db->query("SELECT post_content FROM {$prefix}posts WHERE ID=$id");
+  $oldRow = $oldRes ? $oldRes->fetch_assoc() : null;
+  $oldContent = $oldRow ? $oldRow['post_content'] : '';
   $db->query("UPDATE {$prefix}posts SET post_title='$name', post_name='$slug', post_content='$desc' WHERE ID=$id");
   $meta = $db->query("SELECT meta_id FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_price'");
   if($meta && $meta->num_rows){
@@ -1109,15 +1024,269 @@ case 'save_product':
   if($old_slug && $old_slug !== $slug){
     $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
     if($check && $check->num_rows){
-      $oldPath = '/product/'.$old_slug.'/';
-      $newPath = '/product/'.$slug.'/';
+      $oldPath = '/'.$old_slug.'/';
+      $newPath = '/'.$slug.'/';
       if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
         $redirect_success = true;
       }
     }
   }
-  echo json_encode(array('success'=>true,'redirect'=>$redirect_success));
+  // log content history
+  $ldb = connect_local();
+  if($ldb){
+    $lp = $_SESSION['logdb']['prefix'];
+    $vres = $ldb->query("SELECT MAX(version) v FROM {$lp}product_content_history WHERE product_id=$id");
+    $vrow = $vres ? $vres->fetch_assoc() : null;
+    $next = $vrow ? intval($vrow['v'])+1 : 1;
+    $uid = intval($_SESSION['user_id']);
+    $stmt = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
+    if($stmt){
+      $stmt->bind_param('issii',$id,$oldContent,$desc,$uid,$next);
+      $stmt->execute();
+      $stmt->close();
+    }
+    $ldb->close();
+  }
+  $product_url = (isset($_POST['product_url']) && $_POST['product_url']) ? $_POST['product_url'] : ('https://'.($_SERVER['HTTP_HOST'] ?? '').'/'.$slug.'/');
+  $indexRes = google_index_url($product_url);
+  echo json_encode(array('success'=>true,'redirect'=>$redirect_success,'indexed'=>$indexRes[0],'index_log'=>$indexRes[1]));
   $db->close();
+  break;
+
+case 'analyze_product_seo':
+  $id = intval($_POST['id'] ?? 0);
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $pRes = $db->query("SELECT post_title,post_content FROM {$prefix}posts WHERE ID=$id");
+  $p = $pRes ? $pRes->fetch_assoc() : null;
+  if(!$p){ $db->close(); echo json_encode(array('success'=>false,'message'=>'محصول یافت نشد')); break; }
+  $titleRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_title'");
+  $titleRow = $titleRes ? $titleRes->fetch_assoc() : null; $seoTitle = ($titleRow['meta_value'] ?? '');
+  $descRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_metadesc'");
+  $descRow = $descRes ? $descRes->fetch_assoc() : null; $seoDesc = ($descRow['meta_value'] ?? '');
+  $focusRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
+  $focusRow = $focusRes ? $focusRes->fetch_assoc() : null; $focus = ($focusRow['meta_value'] ?? $p['post_title']);
+  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus);
+  $ldb = connect_local();
+  if($ldb){
+    $lp = $_SESSION['logdb']['prefix'];
+    $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
+    if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
+    $ldb->close();
+  }
+  $db->close();
+  echo json_encode(array('success'=>true,'data'=>$analysis,'suggestions'=>array('title'=>SEOAnalyzer::suggestTitle($p['post_title']),'meta'=>SEOAnalyzer::suggestMeta($p['post_title']))));
+  break;
+
+case 'bulk_analyze_product_seo':
+  $db = connect(); if(!$db) break;
+  $prefix = $_SESSION['db']['prefix'];
+  $res = $db->query("SELECT ID,post_title,post_content FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'");
+  $count = 0;
+  $ldb = connect_local();
+  if($res){
+    while($p=$res->fetch_assoc()){
+      $id = intval($p['ID']);
+      $titleRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_title'");
+      $titleRow = $titleRes ? $titleRes->fetch_assoc() : null; $seoTitle = ($titleRow['meta_value'] ?? '');
+      $descRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_metadesc'");
+      $descRow = $descRes ? $descRes->fetch_assoc() : null; $seoDesc = ($descRow['meta_value'] ?? '');
+      $focusRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
+      $focusRow = $focusRes ? $focusRes->fetch_assoc() : null; $focus = ($focusRow['meta_value'] ?? $p['post_title']);
+      $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus);
+      if($ldb){
+        $lp = $_SESSION['logdb']['prefix'];
+        $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
+        if($stmt){ $det=json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
+      }
+      $count++;
+    }
+    $res->close();
+  }
+  if($ldb){ $ldb->close(); }
+  $db->close();
+  echo json_encode(array('success'=>true,'processed'=>$count));
+  break;
+
+case 'get_content_history':
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $pid = intval($_POST['product_id'] ?? 0);
+  $user = intval($_POST['user'] ?? 0);
+  $from = $_POST['from'] ?? '';
+  $to = $_POST['to'] ?? '';
+  $sql = "SELECT h.version,h.old_content,h.new_content,h.changed_at,COALESCE(u.username,'سیستم') username FROM {$lp}product_content_history h LEFT JOIN {$lp}users u ON h.changed_by=u.id WHERE h.product_id=$pid";
+  if($user) $sql .= " AND h.changed_by=$user";
+  if($from){ $f=$ldb->real_escape_string($from); $sql .= " AND h.changed_at>='$f'"; }
+  if($to){ $t=$ldb->real_escape_string($to); $sql .= " AND h.changed_at<='$t'"; }
+  $sql .= " ORDER BY h.version DESC";
+  $rows=array();
+  if($res=$ldb->query($sql)){ while($r=$res->fetch_assoc()){ $rows[]=$r; } $res->close(); }
+  $ldb->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  break;
+
+case 'revert_content':
+  $pid = intval($_POST['product_id'] ?? 0);
+  $version = intval($_POST['version'] ?? 0);
+  $ldb = connect_local();
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  $res = $ldb->query("SELECT new_content FROM {$lp}product_content_history WHERE product_id=$pid AND version=$version");
+  $row = $res ? $res->fetch_assoc() : null;
+  if(!$row){ $ldb->close(); echo json_encode(array('success'=>false,'message'=>'نسخه یافت نشد')); break; }
+  $newContent = $row['new_content'];
+  if($res){ $res->close(); }
+  if(!isset($_SESSION['db'])){ $cfg = secure_load_config(); if(!$cfg){ $ldb->close(); echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده')); break; } $_SESSION['db']=$cfg; } else { $cfg=$_SESSION['db']; }
+  try{ $wdb = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); } catch(mysqli_sql_exception $e){ $ldb->close(); echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده')); break; }
+  if($wdb->connect_errno){ $ldb->close(); echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده')); break; }
+  $wdb->set_charset('utf8mb4');
+  $wp = $cfg['prefix'];
+  $cres = $wdb->query("SELECT post_content FROM {$wp}posts WHERE ID=$pid");
+  $crow = $cres ? $cres->fetch_assoc() : null;
+  $current = $crow ? $crow['post_content'] : '';
+  if($cres){ $cres->close(); }
+  $stmt = $wdb->prepare("UPDATE {$wp}posts SET post_content=? WHERE ID=?");
+  if($stmt){ $stmt->bind_param('si',$newContent,$pid); $stmt->execute(); $stmt->close(); }
+  $vres = $ldb->query("SELECT MAX(version) v FROM {$lp}product_content_history WHERE product_id=$pid");
+  $vrow = $vres ? $vres->fetch_assoc() : null;
+  $next = $vrow ? intval($vrow['v'])+1 : 1;
+  if($vres){ $vres->close(); }
+  $uid = intval($_SESSION['user_id']);
+  $stmt2 = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
+  if($stmt2){ $stmt2->bind_param('issii',$pid,$current,$newContent,$uid,$next); $stmt2->execute(); $stmt2->close(); }
+  $wdb->close();
+  $ldb->close();
+  echo json_encode(array('success'=>true));
+  break;
+
+case 'sync_internal_links':
+  $db = connect_local();
+  if(!$db){ echo json_encode(['success'=>false]); break; }
+  $p = $_SESSION['logdb']['prefix'];
+  $cfg = isset($_SESSION['db']) ? $_SESSION['db'] : secure_load_config();
+  $slugs = [];
+  if($cfg){
+    try{ $wdb = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+    catch(mysqli_sql_exception $e){ $wdb = null; }
+    if($wdb && !$wdb->connect_errno){
+      $wdb->set_charset('utf8mb4');
+      $wp = $cfg['prefix'];
+      $base = '';
+      if($r=$wdb->query("SELECT option_value FROM {$wp}options WHERE option_name='siteurl' LIMIT 1")){
+        $row = $r->fetch_assoc();
+        $base = rtrim($row['option_value'],'/');
+        $r->close();
+      }
+      if($res=$wdb->query("SELECT t.slug,t.name FROM {$wp}terms t JOIN {$wp}term_taxonomy tt ON t.term_id=tt.term_id WHERE tt.taxonomy='product_cat'")){
+        while($cat=$res->fetch_assoc()){
+          $slug = preg_replace('#^product-category/#','',$cat['slug']);
+          if(isset($slugs[$slug])) continue; // avoid duplicates
+          $slugs[$slug] = true;
+          $eslug = $db->real_escape_string($slug);
+          $title = $db->real_escape_string($cat['name']);
+          $url = $db->real_escape_string(rtrim($base,'/').'/'.$slug.'/');
+          $db->query("INSERT INTO {$p}internal_links(category,url,title) VALUES('$eslug','$url','$title') ON DUPLICATE KEY UPDATE url='$url', title='$title'");
+        }
+        $res->close();
+      }
+      $wdb->close();
+    }
+  }
+  $keep = array_map([$db,'real_escape_string'], array_keys($slugs));
+  if(count($keep)>0){
+    $list = "'".implode("','", $keep)."'";
+    $db->query("DELETE FROM {$p}internal_links WHERE category NOT IN ($list)");
+  } else {
+    $db->query("DELETE FROM {$p}internal_links");
+  }
+  $db->close();
+  echo json_encode(['success'=>true]);
+  break;
+
+case 'list_internal_links':
+  $db = connect_local();
+  if(!$db){ echo json_encode(['success'=>false]); break; }
+  $p = $_SESSION['logdb']['prefix'];
+  $rows = [];
+  if($res=$db->query("SELECT id,category,url,title FROM {$p}internal_links")){
+    while($r=$res->fetch_assoc()) $rows[] = $r;
+    $res->close();
+  }
+  $db->close();
+  echo json_encode(['success'=>true,'data'=>$rows]);
+  break;
+
+case 'save_internal_link':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false)); break; }
+  $p=$_SESSION['logdb']['prefix'];
+  $id=intval($_POST['id']??0);
+  $category=$db->real_escape_string($_POST['category']??'');
+  $url=$db->real_escape_string(preg_replace('#/product-category/#','/',$_POST['url']??''));
+  $title=$db->real_escape_string($_POST['title']??'');
+  if($id>0){
+    $db->query("UPDATE {$p}internal_links SET category='$category',url='$url',title='$title' WHERE id=$id");
+  }else{
+    $db->query("INSERT INTO {$p}internal_links(category,url,title) VALUES('$category','$url','$title')");
+  }
+  $db->close();
+  echo json_encode(array('success'=>true));
+  break;
+
+case 'list_external_links':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false)); break; }
+  $p=$_SESSION['logdb']['prefix'];
+  $rows=array();
+  if($res=$db->query("SELECT id,url,title FROM {$p}external_links")){
+    while($r=$res->fetch_assoc()) $rows[]=$r;
+    $res->close();
+  }
+  $db->close();
+  echo json_encode(array('success'=>true,'data'=>$rows));
+  break;
+
+case 'save_external_link':
+  $db=connect_local();
+  if(!$db){ echo json_encode(array('success'=>false)); break; }
+  $p=$_SESSION['logdb']['prefix'];
+  $id=intval($_POST['id']??0);
+  $url=$db->real_escape_string($_POST['url']??'');
+  $title=$db->real_escape_string($_POST['title']??'');
+  if($id>0){
+    $db->query("UPDATE {$p}external_links SET url='$url',title='$title' WHERE id=$id");
+  }else{
+    $db->query("INSERT INTO {$p}external_links(url,title) VALUES('$url','$title')");
+  }
+  $db->close();
+  echo json_encode(array('success'=>true));
+  break;
+
+case 'get_processes':
+  $steps=array();
+  $rows=ProcessManager::getProcesses($steps);
+  echo json_encode(array('success'=>true,'data'=>$rows,'steps'=>$steps));
+  break;
+
+case 'save_processes':
+  $data=json_decode($_POST['data'] ?? '[]',true);
+  ProcessManager::saveProcesses($data);
+  echo json_encode(array('success'=>true));
+  break;
+
+case 'run_process':
+  $name=$_POST['name'] ?? '';
+  $steps=array();
+  ProcessManager::run($name,$steps);
+  echo json_encode(array('success'=>true,'steps'=>$steps));
+  break;
+
+case 'run_due_processes':
+  $steps=array();
+  ProcessManager::runDue($steps);
+  echo json_encode(array('success'=>true,'steps'=>$steps));
   break;
 
 case 'bulk_stock':
@@ -1195,6 +1364,66 @@ case 'bulk_seo_desc':
   }
   echo json_encode(array('success'=>true,'report'=>array('ok'=>$ok,'fail'=>$fail)));
   $db->close();
+  break;
+
+case 'get_dns_settings':
+  $mgr = new SanctionBypassManager();
+  echo json_encode(array('success'=>true,'dns'=>$mgr->getDnsServers()));
+  break;
+
+case 'save_dns_settings':
+  $mgr = new SanctionBypassManager();
+  $dns = isset($_POST['dns']) ? explode(',', $_POST['dns']) : array();
+  $mgr->setDnsServers($dns);
+  echo json_encode(array('success'=>true));
+  break;
+
+case 'test_dns':
+  $mgr = new SanctionBypassManager();
+  $res = $mgr->testDnsLeak();
+  echo json_encode($res);
+  break;
+
+case 'get_chatgpt_settings':
+  $mgr = new ChatGPTManager();
+  echo json_encode(['success'=>true,'config'=>$mgr->getConfig()]);
+  break;
+
+case 'save_chatgpt_settings':
+  $mgr = new ChatGPTManager();
+  $cfg = [
+    'api_key'=>$_POST['api_key'] ?? '',
+    'model'=>$_POST['model'] ?? '',
+    'temperature'=>$_POST['temperature'] ?? '',
+    'max_tokens'=>$_POST['max_tokens'] ?? ''
+  ];
+  $mgr->saveConfig($cfg);
+  echo json_encode(['success'=>true]);
+  break;
+
+case 'test_chatgpt':
+  $mgr = new ChatGPTManager();
+  $res = $mgr->testConnection();
+  echo json_encode($res);
+  break;
+
+case 'enqueue_process':
+  $name = trim($_POST['name'] ?? '');
+  if($name===''){ echo json_encode(['success'=>false,'message'=>'نام فرایند مشخص نیست']); break; }
+  try{
+    $pq = new ProcessQueue();
+    $id = $pq->enqueue($name);
+    @exec('php '. __DIR__ .'/worker.php > /dev/null 2>&1 &');
+    echo json_encode(['success'=>true,'id'=>$id]);
+  }catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+  break;
+
+case 'list_process_queue':
+  try{
+    $pq = new ProcessQueue();
+    $rows = $pq->listAll();
+    echo json_encode(['success'=>true,'data'=>$rows]);
+  }catch(Exception $e){ echo json_encode(['success'=>false,'data'=>[],'message'=>$e->getMessage()]); }
   break;
 
   case 'analytics':
@@ -1290,6 +1519,7 @@ function connect_local(){
   if($mysqli->connect_errno) return false;
   $mysqli->set_charset('utf8mb4');
   init_local_tables($mysqli,$cfg['prefix']);
+  seed_content_history_if_empty($mysqli,$cfg['prefix']);
   return $mysqli;
 }
 
@@ -1305,10 +1535,39 @@ function init_local_tables($db,$prefix){
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}assignment_modes (user_id INT PRIMARY KEY, mode VARCHAR(20), quota_min INT, quota_max INT, category_id BIGINT, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}password_resets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, reset_token VARCHAR(255), expires_at DATETIME, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}settings (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, value TEXT)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_content_history (id BIGINT AUTO_INCREMENT PRIMARY KEY, product_id BIGINT, old_content LONGTEXT, new_content LONGTEXT, changed_by INT, changed_at DATETIME, version INT, FOREIGN KEY (changed_by) REFERENCES {$prefix}users(id) ON DELETE SET NULL)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_seo_scores (product_id BIGINT PRIMARY KEY, score INT, details LONGTEXT, analyzed_at DATETIME)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}processes (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, active TINYINT(1) DEFAULT 1, interval_hours INT, last_run DATETIME, timezone VARCHAR(50) DEFAULT 'Asia/Tehran')");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}process_queue (id INT AUTO_INCREMENT PRIMARY KEY, process_name VARCHAR(255), status ENUM('pending','running','completed','failed') DEFAULT 'pending', started_at DATETIME NULL, finished_at DATETIME NULL, result TEXT NULL)");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}internal_links (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(191) UNIQUE, url TEXT, title VARCHAR(191))");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}external_links (id INT AUTO_INCREMENT PRIMARY KEY, url TEXT, title VARCHAR(191))");
+}
 
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}products_seo (product_id INT PRIMARY KEY, product_name VARCHAR(255), category_id INT, impressions INT DEFAULT 0, clicks INT DEFAULT 0, ctr FLOAT DEFAULT 0, avg_position FLOAT DEFAULT 0, indexed_status ENUM('indexed','noindex','blocked','canonical_error') DEFAULT 'indexed', last_updated DATETIME)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_keywords (id INT AUTO_INCREMENT PRIMARY KEY, product_id INT, keyword VARCHAR(255), impressions INT DEFAULT 0, clicks INT DEFAULT 0, ctr FLOAT DEFAULT 0, avg_position FLOAT DEFAULT 0, last_updated DATETIME, FOREIGN KEY (product_id) REFERENCES {$prefix}products_seo(product_id) ON DELETE CASCADE)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_trends (id INT AUTO_INCREMENT PRIMARY KEY, product_id INT, date DATE, impressions INT DEFAULT 0, clicks INT DEFAULT 0, ctr FLOAT DEFAULT 0, avg_position FLOAT DEFAULT 0, FOREIGN KEY (product_id) REFERENCES {$prefix}products_seo(product_id) ON DELETE CASCADE)");
+function seed_content_history_if_empty($db,$prefix){
+  $cnt = $db->query("SELECT COUNT(*) c FROM {$prefix}product_content_history");
+  $row = $cnt ? $cnt->fetch_assoc() : null;
+  if($cnt){ $cnt->close(); }
+  if(!$row || intval($row['c'])>0) return;
+  // connect to WooCommerce database
+  if(!isset($_SESSION['db'])){ $cfg = secure_load_config(); if(!$cfg) return; $_SESSION['db']=$cfg; } else { $cfg=$_SESSION['db']; }
+  try{ $wdb = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
+  catch(mysqli_sql_exception $e){ return; }
+  if($wdb->connect_errno){ return; }
+  $wdb->set_charset('utf8mb4');
+  $wp = $cfg['prefix'];
+  $res = $wdb->query("SELECT ID,post_content FROM {$wp}posts WHERE post_type='product' AND post_status='publish'");
+  if($res){
+    $stmt = $db->prepare("INSERT INTO {$prefix}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,NULL,?,0,NOW(),1)");
+    while($p = $res->fetch_assoc()){
+      $pid = intval($p['ID']);
+      $content = $p['post_content'];
+      $stmt->bind_param('is',$pid,$content);
+      $stmt->execute();
+    }
+    $stmt->close();
+    $res->close();
+  }
+  $wdb->close();
 }
 
 function get_setting($db,$prefix,$name){
@@ -1343,6 +1602,24 @@ function secure_load_local_config(){
   return $json ? json_decode($json,true) : false;
 }
 
+function google_index_url($url){
+  $tokenPath = __DIR__.'/google_token.txt';
+  if(!file_exists($tokenPath)) return array(false,'token missing');
+  $token = trim(file_get_contents($tokenPath));
+  $payload = json_encode(array('url'=>$url,'type'=>'URL_UPDATED'));
+  $ch = curl_init('https://indexing.googleapis.com/v3/urlNotifications:publish');
+  curl_setopt_array($ch,array(
+    CURLOPT_POST=>true,
+    CURLOPT_RETURNTRANSFER=>true,
+    CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$token),
+    CURLOPT_POSTFIELDS=>$payload
+  ));
+  $resp = curl_exec($ch);
+  $code = curl_getinfo($ch,CURLINFO_HTTP_CODE);
+  curl_close($ch);
+  return array($code==200,$resp);
+}
+
 function log_event($action){
   $db = connect_local();
   if(!$db) return;
@@ -1374,37 +1651,4 @@ function log_event($action){
   $db->close();
 }
 
-function compute_seo_score($title,$meta,$content,$keyword){
-  $title = strtolower($title);
-  $meta = strtolower($meta);
-  $contentText = strtolower(strip_tags($content));
-  $keyword = strtolower($keyword);
-  $words = preg_split('/\\s+/', trim($contentText));
-  $words = array_filter($words); $wordCount = count($words);
-  $score=0;
-  if(strlen($title)>=50 && strlen($title)<=65) $score+=10;
-  if($keyword && strpos($title,$keyword)!==false) $score+=10;
-  if(strlen($meta)>=120 && strlen($meta)<=155) $score+=10;
-  if($keyword && strpos($meta,$keyword)!==false) $score+=10;
-  if($wordCount>=300) $score+=10;
-  if($keyword){
-    $occ = substr_count($contentText,$keyword);
-    $density = $wordCount ? ($occ/$wordCount)*100 : 0;
-    if($density>=0.5 && $density<=3) $score+=10;
-    $paras = preg_split('/\\n+/', $contentText);
-    $first = isset($paras[0]) ? $paras[0] : '';
-    if(strpos($first,$keyword)!==false) $score+=10;
-  }
-  preg_match_all('/<a\\s+[^>]*href=["\']([^"\']+)["\']/', $content, $m);
-  $internal=0;$external=0;
-  if(isset($m[1])){
-    foreach($m[1] as $url){ if(strpos($url,'http')===0) $external++; else $internal++; }
-  }
-  if($internal>0) $score+=10;
-  if($external>0) $score+=10;
-  $sentences = preg_split('/[.!?؟]+/', $contentText, -1, PREG_SPLIT_NO_EMPTY);
-  $avg = count($sentences)? $wordCount/count($sentences):$wordCount;
-  if($avg<=20) $score+=10;
-  return (int)$score;
-}
 ?>
