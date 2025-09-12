@@ -85,38 +85,49 @@ CREATE TABLE IF NOT EXISTS msw_settings (
   value TEXT
 );
 
--- Product-level SEO tables
-CREATE TABLE IF NOT EXISTS msw_products_seo (
-  product_id INT PRIMARY KEY,
-  product_name VARCHAR(255),
-  category_id INT,
-  impressions INT DEFAULT 0,
-  clicks INT DEFAULT 0,
-  ctr FLOAT DEFAULT 0,
-  avg_position FLOAT DEFAULT 0,
-  indexed_status ENUM('indexed','noindex','blocked','canonical_error') DEFAULT 'indexed',
-  last_updated DATETIME
+CREATE TABLE IF NOT EXISTS msw_product_content_history (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  product_id BIGINT,
+  old_content LONGTEXT,
+  new_content LONGTEXT,
+  changed_by INT,
+  changed_at DATETIME,
+  version INT,
+  FOREIGN KEY (changed_by) REFERENCES msw_users(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS msw_product_seo_scores (
+  product_id BIGINT PRIMARY KEY,
+  score INT,
+  details LONGTEXT,
+  analyzed_at DATETIME
+);
+CREATE TABLE IF NOT EXISTS msw_processes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(191) UNIQUE,
+  active TINYINT(1) DEFAULT 1,
+  interval_hours INT,
+  last_run DATETIME,
+  timezone VARCHAR(50) DEFAULT 'Asia/Tehran'
 );
 
-CREATE TABLE IF NOT EXISTS msw_product_keywords (
+CREATE TABLE IF NOT EXISTS msw_process_queue (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  product_id INT,
-  keyword VARCHAR(255),
-  impressions INT DEFAULT 0,
-  clicks INT DEFAULT 0,
-  ctr FLOAT DEFAULT 0,
-  avg_position FLOAT DEFAULT 0,
-  last_updated DATETIME,
-  FOREIGN KEY (product_id) REFERENCES msw_products_seo(product_id) ON DELETE CASCADE
+  process_name VARCHAR(255),
+  status ENUM('pending','running','completed','failed') DEFAULT 'pending',
+  started_at DATETIME NULL,
+  finished_at DATETIME NULL,
+  result TEXT NULL
 );
 
-CREATE TABLE IF NOT EXISTS msw_product_trends (
+CREATE TABLE IF NOT EXISTS msw_internal_links (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  product_id INT,
-  date DATE,
-  impressions INT DEFAULT 0,
-  clicks INT DEFAULT 0,
-  ctr FLOAT DEFAULT 0,
-  avg_position FLOAT DEFAULT 0,
-  FOREIGN KEY (product_id) REFERENCES msw_products_seo(product_id) ON DELETE CASCADE
+  category VARCHAR(191) UNIQUE,
+  url TEXT,
+  title VARCHAR(191)
+);
+
+CREATE TABLE IF NOT EXISTS msw_external_links (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  url TEXT,
+  title VARCHAR(191)
 );
