@@ -9,12 +9,12 @@
 •تصویر محصول (لینک): {{PRODUCT_IMAGE_URL}}
 •دسته‌بندی(ها): {{CATEGORIES_LIST}}
 •عبارت کلیدی اصلی (حداکثر ۴ کلمه؛ اگر خالی بود از عنوان محصول استخراج و کوتاه کن): {{PRIMARY_KEYWORD}}
-•لینک‌های داخلی مرتبط (حداقل 2 مورد – ولی برای عبارت کلیدی اصلی لینک نده):
-{{INTERNAL_LINK_1_URL}}, {{INTERNAL_LINK_2_URL}}
+•لینک‌های داخلی مرتبط:
+{INTERNAL_LINKS}
 •لینک‌های همه دسته‌بندی‌ها (HTML آماده لیست لینک‌ها، در صورت نیاز):
 {{CATEGORY_LINKS_HTML}}
-•لینک‌های خروجی معتبر و مرتبط (۱–۲ مورد):
-{{EXTERNAL_LINK_1_URL}}, {{EXTERNAL_LINK_2_URL}}
+•لینک‌های خروجی معتبر و مرتبط:
+{EXTERNAL_LINKS}
 •شرایط ارسال/گارانتی/بازگشت (در صورت وجود): {{SHIPPING_WARRANTY_NOTES}}
 الزامات سئو و نگارشی (حتماً رعایت کن):
 1.متن حداقل ۵۰۰ کلمه باشد.
@@ -53,7 +53,7 @@
 <figure style="text-align:center; margin:2rem auto;">
   <img src="{{PRODUCT_IMAGE_URL}}"
        alt="تصویر {{PRODUCT_TITLE}} {{BRAND_OR_SERIES}} {{MODEL_CODE}}"
-       style="max-width:80%; height:auto; display:block; margin:0 auto;"
+       style="max-width:30%; height:auto; display:block; margin:0 auto;"
        loading="lazy" decoding="async">
   <figcaption style="font-size:.9rem; opacity:.85; margin-top:.5rem;">
     نمایی از {{PRODUCT_TITLE}} {{MODEL_CODE}} – طراحی، جزئیات و کیفیت ساخت
@@ -113,10 +113,8 @@
 
 <h2>لینک‌های مفید</h2>
 <ul>
-  <li><a href="{{INTERNAL_LINK_1_URL}}">مطالعه بیشتر درباره {{RELATED_TOPIC_1}}</a></li>
-  <li><a href="{{INTERNAL_LINK_2_URL}}">راهنمای خرید {{RELATED_TOPIC_2}}</a></li>
-  <li><a href="{{EXTERNAL_LINK_1_URL}}" rel="nofollow noopener" target="_blank">منبع معتبر ۱</a></li>
-  <li><a href="{{EXTERNAL_LINK_2_URL}}" rel="nofollow noopener" target="_blank">منبع معتبر ۲</a></li>
+  {INTERNAL_LINKS}
+  {EXTERNAL_LINKS}
 </ul>
 
 <!-- (اختیاری) فهرست دسته‌بندی‌ها اگر ورودی داده شد -->
