@@ -27,9 +27,9 @@ $canViewAssignments = in_array('all',$permissions) || in_array('view_assignments
 <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.2.1/styles/ag-grid.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.2.1/styles/ag-theme-alpine.css">
-<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.2.1/dist/ag-grid-community.min.js"></script>
+<link rel="stylesheet" href="https://cdn.datatables.net/editor/2.2.2/css/editor.bootstrap5.min.css">
+<script src="https://cdn.datatables.net/editor/2.2.2/js/dataTables.editor.min.js"></script>
+<script src="https://cdn.datatables.net/editor/2.2.2/js/editor.bootstrap5.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
@@ -62,14 +62,16 @@ footer{font-size:.9rem; margin-top:auto;}
 #logModal .modal-content{height:50vh;}
 #logModal .modal-body{display:flex;flex-direction:column;height:calc(50vh - 56px);}
 #logModal #userLogTable{flex:1;overflow-y:auto;}
-#logModal #userSessionTable{flex:1;overflow-y:auto;}
 #products{padding-bottom:3rem;}
 .yoast-bad{background:#dc3232;color:#fff;}
 .yoast-ok{background:#e7ad1a;color:#fff;}
 .yoast-good{background:#7ad03a;color:#fff;}
 .yoast-none{background:#999;color:#fff;}
 #priceEdit{padding-bottom:3rem;}
-#priceGrid{direction:rtl;height:60vh;}
+#priceTable{direction:rtl;font-family:'Vazirmatn',sans-serif;font-size:16px;}
+#priceTable th{text-align:right;}
+#priceTable td:nth-child(2){text-align:right;}
+#priceTable td:nth-child(3){text-align:center;}
 #priceSearch{width:100%;padding:.75rem 1rem;font-size:1.1rem;box-shadow:0 0 6px rgba(0,0,0,.15);border:1px solid #ced4da;border-radius:.25rem;margin-bottom:1rem;}
 </style>
 </head>
@@ -524,10 +526,13 @@ $('#local-connect-btn').click(function(){
         <option value="15" selected>15</option>
         <option value="30">30</option>
         <option value="50">50</option>
-        <option value="10000">همه</option>
+        <option value="-1">همه</option>
       </select>
     </div>
-    <div id="priceGrid" class="ag-theme-alpine w-100"></div>
+    <table id="priceTable" class="table table-striped table-bordered w-100">
+      <thead><tr><th>تصویر</th><th>نام محصول</th><th>قیمت</th></tr></thead>
+      <tbody><tr id="priceLoading"><td colspan="3" class="text-center">لطفاً صبر کنید... محصولات در حال بارگذاری هستند.</td></tr></tbody>
+    </table>
   </div>
   <div class="tab-pane fade p-3" id="users">
     <div class="d-flex justify-content-end mb-3">
@@ -1085,9 +1090,7 @@ $('#local-connect-btn').click(function(){
     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
    </div>
    <div class="modal-body">
-    <table id="userLogTable" class="table table-striped mb-3 w-100"><thead><tr></tr></thead><tbody></tbody></table>
-    <hr>
-    <table id="userSessionTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
+    <table id="userLogTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
    </div>
   </div>
 </div>
@@ -1126,8 +1129,6 @@ $('#local-connect-btn').click(function(){
    </div>
    <div class="modal-body">
     <table id="logsTable" class="table table-striped mb-3 w-100"><thead><tr></tr></thead><tbody></tbody></table>
-    <hr>
-    <table id="sessionsTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
    </div>
   </div>
  </div>
@@ -1693,7 +1694,7 @@ $(document).ajaxStart(()=>NProgress.start());
 $(document).ajaxStop(()=>NProgress.done());
 function debounce(fn,delay){let t;return function(){clearTimeout(t);t=setTimeout(()=>fn.apply(this,arguments),delay);};}
 // DataTables tables
-let productsTable, usersTable, logsTable, userLogDataTable, assignUsersTable, assignedProductsTable, searchConsoleTable, scChart, sessionsTable, userSessionDataTable, rolesTable, processesTable, queueTable, priceGrid, priceGridOptions;
+let productsTable, usersTable, logsTable, userLogDataTable, assignUsersTable, assignedProductsTable, searchConsoleTable, scChart, rolesTable, processesTable, queueTable, priceTable, priceEditor;
 let productsInit=false, usersInit=false, assignmentsInit=false, logsInit=false, scKeywordsInit=false, priceInit=false;
 function initProducts(){
   productsTable=$('#productsTable').DataTable({
@@ -1751,48 +1752,68 @@ function loadProducts(){
 }
 
 function initPriceTable(){
-  priceGridOptions={
-    columnDefs:[
-      {headerName:'تصویر',field:'image',width:90,sortable:false,filter:false,cellRenderer:params=>params.value?`<img src="${params.value}" style="height:40px" loading="lazy">`:''},
-      {headerName:'نام محصول',field:'name',flex:1,filter:true},
-      {headerName:'قیمت',field:'price',editable:true,width:120}
-    ],
-    defaultColDef:{resizable:true},
-    rowData:[],
-    rowHeight:45,
-    pagination:true,
-    paginationPageSize:15,
-    onCellKeyDown:function(e){
-      if(e.event.key==='Enter' && e.column.getColId()==='price'){
-        savePrice(e.data);
-        e.event.preventDefault();
-        const next=e.rowIndex+1;
-        if(next<priceGridOptions.api.getDisplayedRowCount()){
-          priceGridOptions.api.startEditingCell({rowIndex:next,colKey:'price'});
-        }
+  priceEditor=new $.fn.dataTable.Editor({
+    ajax:function(method,url,data,success,error){
+      if(data.action==='edit'){
+        const id=Object.keys(data.data)[0];
+        const val=data.data[id].price;
+        $.post('ajax.php',{action:'update_price',id:id,price:val},function(res){
+          if(res.success){ success({data:[{id:id,price:val}]}); toastr.success('ذخیره شد'); }
+          else { error(res.message); toastr.error(res.message||'خطا'); }
+        },'json');
+      } else {
+        $.post('ajax.php',{action:'list_prices'},function(res){
+          if(res.success){ success(res); }
+          else { error(res.message); }
+        },'json');
       }
     },
-    onCellValueChanged:function(e){
-      if(e.column.getColId()==='price'){
-        savePrice(e.data);
-      }
+    table:'#priceTable',
+    idSrc:'id',
+    fields:[{label:'قیمت',name:'price'}]
+  });
+
+  priceTable=$('#priceTable').DataTable({
+    ajax:{
+      url:'ajax.php', type:'POST',
+      data:function(){return {action:'list_prices'};},
+      dataSrc:function(res){return res.success?res.data:[];}
+    },
+    rowId:'id',
+    columns:[
+      {data:'image', render:data=>data?`<img src="${data}" style="height:40px" loading="lazy">`:''},
+      {data:'name'},
+      {data:'price', className:'text-center edit-price', render:data=>Number(data||0).toLocaleString('en-US')}
+    ],
+    paging:true,
+    pageLength:15,
+    lengthMenu:[[15,30,50,-1],[15,30,50,'همه']],
+    searching:true,
+    ordering:false,
+    processing:true,
+    language:{emptyTable:'',zeroRecords:'هیچ محصولی یافت نشد',loadingRecords:'',processing:'لطفاً صبر کنید... محصولات در حال بارگذاری هستند.'},
+    info:false,
+    initComplete:function(){ $('#priceSearch').trigger('input'); }
+  });
+
+  $('#priceSearch').on('input', function(){ priceTable.search(this.value).draw(); });
+  $('#pricePageSize').on('change', function(){ priceTable.page.len($(this).val()).draw(); });
+
+  $('#priceTable').on('click','td.edit-price',function(){ $(this).attr('tabindex',0).focus(); });
+  $('#priceTable').on('dblclick','td.edit-price',function(){ priceEditor.inline(this,{onBlur:'submit'}); });
+  $('#priceTable').on('keydown','td.edit-price',function(e){ if(e.key==='Enter'){ priceEditor.inline(this,{onBlur:'submit'}); } });
+
+  priceEditor.on('submitSuccess',function(e,json,data){
+    const id=Object.keys(data.data)[0];
+    const newVal=data.data[id].price;
+    priceTable.cell('#'+id,2).data(Number(newVal).toLocaleString('en-US')).draw(false);
+    const next=priceTable.row('#'+id).index()+1;
+    if(next<priceTable.rows().count()){
+      const cell=priceTable.cell(next,2);
+      priceEditor.inline(cell.node(),{onBlur:'submit'});
     }
-  };
-  const gridDiv=document.getElementById('priceGrid');
-  priceGrid=new agGrid.Grid(gridDiv, priceGridOptions);
-  loadPriceData();
-  $('#priceSearch').on('input', function(){ priceGridOptions.api.setQuickFilter(this.value); });
-  $('#pricePageSize').on('change', function(){ priceGridOptions.api.paginationSetPageSize(Number(this.value)); });
-}
-
-function loadPriceData(){
-  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=list_prices'})
-    .then(r=>r.json()).then(r=>{if(r.success)priceGridOptions.api.setRowData(r.data);});
-}
-
-function savePrice(row){
-  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`action=update_price&id=${row.id}&price=${row.price}`})
-    .then(r=>r.json()).then(r=>{if(r.success){toastr.success('ذخیره شد');}else{toastr.error(r.message||'خطا');}});
+  });
+  priceTable.on('xhr.dt',function(){ $('#priceLoading').remove(); });
 }
 
 let historyTable;
@@ -2243,21 +2264,6 @@ function initLogs(){
     columnDefs:[{targets:'_all',className:'text-start'}],
     language:{paginate:{previous:'قبلی',next:'بعدی'}}
   });
-  sessionsTable=$('#sessionsTable').DataTable({
-    columns:[
-      {title:'کاربر'},
-      {title:'آی‌پی'},
-      {title:'دستگاه'},
-      {title:'انقضا'},
-      {title:''}
-    ],
-    pageLength:20,
-    searching:false,
-    ordering:false,
-    info:false,
-    columnDefs:[{targets:'_all',className:'text-start'}],
-    language:{paginate:{previous:'قبلی',next:'بعدی'}}
-  });
   loadLogs();
 }
 function loadLogs(){
@@ -2274,18 +2280,6 @@ function loadLogs(){
       if(r.message) log('Logs: '+r.message);
     }
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
-
- fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=sessions_list'})
-  .then(r=>r.json()).then(r=>{
-    if(r.success && sessionsTable){
-      const rows=r.data.map(s=>[
-        s.username,s.ip_address,s.device_info,toJalali(s.expires_at),
-        `<button class='btn btn-sm btn-danger logout-session' data-id='${s.id}'>خروج</button>`
-      ]);
-      sessionsTable.clear();
-      sessionsTable.rows.add(rows).draw();
-    }
-  });
 }
 function initSearchConsole(){
   log('SearchConsole: init');
@@ -2382,22 +2376,9 @@ function initUserLog(){
     info:false,
     columnDefs:[{targets:'_all',className:'text-center'}]
   });
-  userSessionDataTable=$('#userSessionTable').DataTable({
-    columns:[
-      {title:'آی‌پی'},
-      {title:'دستگاه'},
-      {title:'انقضا'},
-      {title:''}
-    ],
-    pageLength:20,
-    searching:false,
-    ordering:false,
-    info:false,
-    columnDefs:[{targets:'_all',className:'text-center'}]
-  });
 }
 function loadUserLogs(id){
- if(!userLogDataTable || !userSessionDataTable) initUserLog();
+ if(!userLogDataTable) initUserLog();
  const toast=toastr.info('لطفاً صبر کنید، داده‌ها در حال بارگیری است',{timeOut:0,extendedTimeOut:0});
  NProgress.start();
  fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=fetch_user_logs&id='+id})
@@ -2406,12 +2387,6 @@ function loadUserLogs(id){
       const rows=r.logs.map(d=>[toJalali(d.ts),d.action,d.ip,d.country,d.city,d.isp]);
       userLogDataTable.clear();
       userLogDataTable.rows.add(rows).draw();
-      const srows=r.sessions.map(s=>[
-        s.ip_address,s.device_info,toJalali(s.expires_at),
-        `<button class='btn btn-sm btn-danger logout-session' data-id='${s.id}'>خروج</button>`
-      ]);
-      userSessionDataTable.clear();
-      userSessionDataTable.rows.add(srows).draw();
       $('#logModal').modal('show');
       if(r.message) log('UserLogs: '+r.message);
     }else{ toastr.error(r.message); }
@@ -2729,19 +2704,6 @@ $('#openLogsCard').click(function(){
   $('#logsModal').modal('show');
 });
 
-$(document).on('click','.logout-session',function(){
-  const id=$(this).data('id');
-  $.post('ajax.php',{action:'session_logout',id:id},function(r){
-    if(r.success){
-      toastr.success('نشست خاتمه یافت');
-      loadLogs();
-      if($('#logModal').hasClass('show')){
-        const uid=$('#logUser').data('id')||currentUserId;
-        loadUserLogs(uid);
-      }
-    }else{ toastr.error(r.message); }
-  },'json');
-});
 
 $('#myAccount').click(function(e){
   e.preventDefault();

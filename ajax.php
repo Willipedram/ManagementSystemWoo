@@ -186,17 +186,8 @@ case 'fetch_user_logs':
     }
     $stmt->close();
   }
-  $sessions=array();
-  $stmt2 = $db->prepare("SELECT id, ip_address, device_info, expires_at FROM {$prefix}sessions WHERE user_id=? AND expires_at>NOW()");
-  if($stmt2){
-    $stmt2->bind_param('i',$uid);
-    $stmt2->execute();
-    $rs=$stmt2->get_result();
-    while($s=$rs->fetch_assoc()) $sessions[]=$s;
-    $stmt2->close();
-  }
   $db->close();
-  echo json_encode(array('success'=>true,'logs'=>$rows,'sessions'=>$sessions,'message'=>$warn));
+  echo json_encode(array('success'=>true,'logs'=>$rows,'message'=>$warn));
   break;
 case 'logs_list':
   $db = connect_local();
@@ -228,25 +219,6 @@ case 'logs_list':
   }
   $db->close();
   echo json_encode(array('success'=>true,'data'=>$rows,'message'=>$warn));
-  break;
-case 'sessions_list':
-  $db=connect_local();
-  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
-  $prefix=$_SESSION['logdb']['prefix'];
-  $rows=array();
-  $res=$db->query("SELECT s.id,u.username,s.ip_address,s.device_info,s.expires_at FROM {$prefix}sessions s JOIN {$prefix}users u ON s.user_id=u.id WHERE s.expires_at>NOW()");
-  if($res){ while($r=$res->fetch_assoc()) $rows[]=$r; }
-  $db->close();
-  echo json_encode(array('success'=>true,'data'=>$rows));
-  break;
-case 'session_logout':
-  $db=connect_local();
-  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
-  $prefix=$_SESSION['logdb']['prefix'];
-  $id=intval($_POST['id'] ?? 0);
-  $db->query("DELETE FROM {$prefix}sessions WHERE id=$id");
-  $db->close();
-  echo json_encode(array('success'=>true));
   break;
 case 'fetch_search_console':
   $ldb = connect_local();
@@ -1593,7 +1565,6 @@ function init_local_tables($db,$prefix){
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}roles (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, permissions TEXT)");
   $db->query("INSERT INTO {$prefix}roles(id,name,permissions) VALUES (1,'مدیر کل','all') ON DUPLICATE KEY UPDATE name='مدیر کل', permissions='all'");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(191) UNIQUE, password_hash VARCHAR(255) NOT NULL, full_name VARCHAR(191), phone_number VARCHAR(20), role_id INT, status VARCHAR(20) DEFAULT 'active', created_at DATETIME, updated_at DATETIME, FOREIGN KEY (role_id) REFERENCES {$prefix}roles(id))");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}sessions (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, token VARCHAR(255), ip_address VARCHAR(45), device_info VARCHAR(191), expires_at DATETIME, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}clients (id INT AUTO_INCREMENT PRIMARY KEY, client_name VARCHAR(191), api_key VARCHAR(191), client_secret VARCHAR(191), redirect_uri TEXT, status VARCHAR(20))");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}user_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, action VARCHAR(50), timestamp DATETIME, ip_address VARCHAR(45), country VARCHAR(100), city VARCHAR(100), isp VARCHAR(191), FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_assignments (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, product_id BIGINT, assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY product_unique (product_id), KEY user_idx (user_id))");
