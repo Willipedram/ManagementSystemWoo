@@ -255,6 +255,7 @@ case 'fetch_search_console':
   $query = $_POST['query'] ?? '';
   $device = $_POST['device'] ?? '';
   $country = $_POST['country'] ?? '';
+  $dimension = $_POST['dimension'] ?? 'query';
   $ldb->close();
   if(!$cid || !$secret || !$refresh || !$site){
     echo json_encode(array('success'=>false,'message'=>'تنظیمات سرچ کنسول ناقص است')); break;
@@ -278,11 +279,11 @@ case 'fetch_search_console':
   $payloadArr = array(
     'startDate'=>$from,
     'endDate'=>$to,
-    'dimensions'=>array('query'),
+    'dimensions'=>array($dimension),
     'rowLimit'=>250
   );
   $filters=array();
-  if($query !== ''){ $filters[] = array('dimension'=>'query','operator'=>'contains','expression'=>$query); }
+  if($query !== ''){ $filters[] = array('dimension'=>$dimension,'operator'=>'contains','expression'=>$query); }
   if($device !== ''){ $filters[] = array('dimension'=>'device','operator'=>'equals','expression'=>$device); }
   if($country !== ''){ $filters[] = array('dimension'=>'country','operator'=>'equals','expression'=>$country); }
   if($filters){
@@ -309,17 +310,50 @@ case 'fetch_search_console':
   $data = array();
   foreach($rows as $r){
     $data[] = array(
-      'query'=>$r['keys'][0] ?? '',
+      'key'=>$r['keys'][0] ?? '',
       'clicks'=>$r['clicks'] ?? 0,
       'impressions'=>$r['impressions'] ?? 0,
-      'ctr'=>isset($r['ctr'])?round($r['ctr']*100,2).'%' : '0%',
+      'ctr'=>isset($r['ctr'])?round($r['ctr']*100,2) : 0,
       'position'=>$r['position'] ?? 0
     );
   }
-  if(empty($data)){
+  // second request for daily metrics
+  $payload2 = json_encode(array(
+    'startDate'=>$from,
+    'endDate'=>$to,
+    'dimensions'=>array('date'),
+    'rowLimit'=>250,
+    'dimensionFilterGroups'=>$filters?array(array('groupType'=>'and','filters'=>$filters)):null
+  ));
+  $ch2 = curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
+  curl_setopt_array($ch2,array(
+    CURLOPT_POST=>true,
+    CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),
+    CURLOPT_POSTFIELDS=>$payload2,
+    CURLOPT_RETURNTRANSFER=>true
+  ));
+  $resp2 = curl_exec($ch2);
+  $http2 = curl_getinfo($ch2,CURLINFO_HTTP_CODE);
+  $resp2 = json_decode($resp2,true);
+  $dateRows = $resp2['rows'] ?? array();
+  $dates = array();
+  $sumClicks = 0; $sumImpr = 0; $sumPosWeighted = 0;
+  foreach($dateRows as $r){
+    $clicks=$r['clicks'] ?? 0;
+    $impr=$r['impressions'] ?? 0;
+    $ctr=$impr>0?round($clicks/$impr*100,2):0;
+    $pos=$r['position'] ?? 0;
+    $dates[] = array('date'=>$r['keys'][0] ?? '', 'clicks'=>$clicks, 'impressions'=>$impr, 'ctr'=>$ctr, 'position'=>$pos);
+    $sumClicks += $clicks;
+    $sumImpr += $impr;
+    $sumPosWeighted += $pos*$impr;
+  }
+  if(empty($data) && empty($dates)){
     echo json_encode(array('success'=>false,'message'=>'داده‌ای برای بازه زمانی انتخاب نشده'));
   }else{
-    echo json_encode(array('success'=>true,'data'=>$data));
+    $avgCtr = $sumImpr>0?round($sumClicks/$sumImpr*100,2):0;
+    $avgPos = $sumImpr>0?round($sumPosWeighted/$sumImpr,2):0;
+    echo json_encode(array('success'=>true,'data'=>array('rows'=>$data,'dates'=>$dates,'summary'=>array('clicks'=>$sumClicks,'impressions'=>$sumImpr,'ctr'=>$avgCtr,'position'=>$avgPos))));
   }
   break;
 case 'load_api_settings':

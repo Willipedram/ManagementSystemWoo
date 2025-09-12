@@ -520,13 +520,20 @@ $('#local-connect-btn').click(function(){
     </ul>
     <div class="tab-content">
       <div class="tab-pane fade show active" id="scKeywords">
+        <div class="row text-center mb-3" id="scSummary">
+          <div class="col-6 col-md-3 mb-2"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">کل کلیک‌ها</div><div class="h4 mb-0" id="scClicks">0</div></div></div></div>
+          <div class="col-6 col-md-3 mb-2"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">کل نمایش‌ها</div><div class="h4 mb-0" id="scImpressions">0</div></div></div></div>
+          <div class="col-6 col-md-3 mb-2"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">میانگین CTR</div><div class="h4 mb-0" id="scCtr">0%</div></div></div></div>
+          <div class="col-6 col-md-3 mb-2"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">میانگین رتبه</div><div class="h4 mb-0" id="scPosition">0</div></div></div></div>
+        </div>
         <div class="row g-2 mb-3 align-items-end">
           <div class="col-md-2"><label class="form-label">از تاریخ</label><input type="date" id="kwFrom" class="form-control"></div>
           <div class="col-md-2"><label class="form-label">تا تاریخ</label><input type="date" id="kwTo" class="form-control"></div>
-          <div class="col-md-2"><label class="form-label">کوئری</label><input type="text" id="kwQuery" class="form-control" placeholder="جستجو..."></div>
+          <div class="col-md-2"><label class="form-label">نوع</label><select id="kwDimension" class="form-select"><option value="query">کوئری</option><option value="page">صفحه</option><option value="country">کشور</option><option value="device">دستگاه</option><option value="searchAppearance">نوع نمایش</option></select></div>
+          <div class="col-md-2"><label class="form-label">جستجو</label><input type="text" id="kwQuery" class="form-control" placeholder="جستجو..."></div>
           <div class="col-md-2"><label class="form-label">دستگاه</label><select id="kwDevice" class="form-select"><option value="">همه</option><option value="DESKTOP">دسکتاپ</option><option value="MOBILE">موبایل</option><option value="TABLET">تبلت</option></select></div>
-          <div class="col-md-2"><label class="form-label">کشور</label><input type="text" id="kwCountry" class="form-control" placeholder="IR"></div>
-          <div class="col-md-2"><button class="btn btn-primary w-100" id="filterKeywords">اعمال فیلتر</button></div>
+          <div class="col-md-1"><label class="form-label">کشور</label><input type="text" id="kwCountry" class="form-control" placeholder="IR"></div>
+          <div class="col-md-1"><button class="btn btn-primary w-100" id="filterKeywords">اعمال</button></div>
         </div>
         <canvas id="scChart" height="120" class="mb-3"></canvas>
         <table id="searchConsoleTable" class="table table-striped w-100"><thead><tr></tr></thead><tbody></tbody></table>
@@ -1633,8 +1640,9 @@ function initProducts(){
     info:false,
     columnDefs:[
       {targets:'_all', className:'text-center'},
+      {targets:4, width:'90px'},
       {targets:5, width:'80px'},
-      {targets:[6,7], width:'90px'}
+      {targets:[6,7,8], width:'90px'}
     ],
     language:{search:'',searchPlaceholder:'جستجو...'},
     dom:"<'row'<'col-sm-8'f><'col-sm-4'l>>t<'row'<'col-sm-6'i><'col-sm-6'p>>"
@@ -2125,8 +2133,9 @@ function loadSearchConsole(){
   const q=document.getElementById('kwQuery').value;
   const device=document.getElementById('kwDevice').value;
   const country=document.getElementById('kwCountry').value;
+  const dim=document.getElementById('kwDimension').value;
   log(`SearchConsole: sending request from ${from} to ${to} q=${q}`);
-  const params=new URLSearchParams({action:'fetch_search_console',from:from,to:to,query:q,device:device,country:country});
+  const params=new URLSearchParams({action:'fetch_search_console',from:from,to:to,query:q,device:device,country:country,dimension:dim});
   const toast=toastr.info('لطفاً صبر کنید، داده‌ها در حال بارگیری است',{timeOut:0,extendedTimeOut:0});
   NProgress.start();
   fetch('ajax.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params.toString()})
@@ -2135,16 +2144,23 @@ function loadSearchConsole(){
       log('SearchConsole: response '+JSON.stringify(r));
       if(r.success && searchConsoleTable){
         log('SearchConsole: updating table');
-        const rows=r.data.map(d=>[
-          d.query,d.clicks,d.impressions,d.ctr,d.position
+        const rows=r.data.rows.map(d=>[
+          d.key,d.clicks,d.impressions, d.ctr+'%', d.position
         ]);
+        const headerMap={query:'کوئری',page:'صفحه',country:'کشور',device:'دستگاه',searchAppearance:'نوع نمایش'};
+        $('#searchConsoleTable thead th').eq(0).text(headerMap[dim]||'کوئری');
         searchConsoleTable.clear();
         searchConsoleTable.rows.add(rows).draw();
-        const labels=r.data.map(d=>d.query);
-        const clicks=r.data.map(d=>d.clicks);
+        const labels=r.data.dates.map(d=>toJalaliDate(d.date));
+        const clicks=r.data.dates.map(d=>d.clicks);
+        const impressions=r.data.dates.map(d=>d.impressions);
+        document.getElementById('scClicks').textContent=r.data.summary.clicks;
+        document.getElementById('scImpressions').textContent=r.data.summary.impressions;
+        document.getElementById('scCtr').textContent=r.data.summary.ctr+'%';
+        document.getElementById('scPosition').textContent=r.data.summary.position;
         if(scChart){ scChart.destroy(); }
         const ctx=document.getElementById('scChart');
-        scChart=new Chart(ctx,{type:'bar',data:{labels:labels,datasets:[{label:'کلیک',data:clicks,backgroundColor:'#0d6efd'}]}});
+        scChart=new Chart(ctx,{type:'line',data:{labels:labels,datasets:[{label:'کلیک',data:clicks,borderColor:'#0d6efd',backgroundColor:'rgba(13,110,253,0.1)',tension:0.3},{label:'ایمپرشن',data:impressions,borderColor:'#198754',backgroundColor:'rgba(25,135,84,0.1)',tension:0.3}]} });
       } else {
         log('SearchConsole: failed to load data');
         if(r.message) log('SearchConsole: '+r.message);
@@ -2411,6 +2427,9 @@ $('#bulkSeoDesc').click(function(){
 function toJalali(d){
   const date=new Date(d.replace(' ','T'));
   return date.toLocaleString('fa-IR-u-ca-persian',{dateStyle:'short',timeStyle:'short'});
+}
+function toJalaliDate(d){
+  return new Date(d).toLocaleDateString('fa-IR-u-ca-persian',{dateStyle:'short'});
 }
 function showUserLogs(id, name){
   $('#logUser').text(name).data('id',id);
