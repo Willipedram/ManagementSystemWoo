@@ -805,7 +805,7 @@ case 'list_products':
         $stockRow = $stockRes ? $stockRes->fetch_assoc() : null; $stock = ($stockRow && isset($stockRow['meta_value'])) ? $stockRow['meta_value'] : 'instock';
         $priceDisplay = ($price && $price !== '0') ? $price : 'بدون قیمت';
         $stockDisplay = $stock=='instock' ? 'موجود' : 'ناموجود';
-        $productUrl = $site.'/product/'.$row['post_name'].'/';
+        $productUrl = rtrim($site,'/').'/'.$row['post_name'].'/';
         $rows[] = array(
           'id'=>$id,
           'image'=>$image,
@@ -873,10 +873,10 @@ case 'get_product':
   $imgRes = $db->query("SELECT p2.guid FROM {$prefix}postmeta pm JOIN {$prefix}posts p2 ON p2.ID = pm.meta_value WHERE pm.post_id=$id AND pm.meta_key='_thumbnail_id' ORDER BY pm.meta_id DESC LIMIT 1");
   $imgRow = $imgRes ? $imgRes->fetch_assoc() : null; $image = ($imgRow && isset($imgRow['guid'])) ? $imgRow['guid'] : '';
   $categoryUrl = '';
-  if(!empty($selected)){ $categoryUrl = $site.'/product-category/'.$selected[0]['slug'].'/'; }
-  $productUrl = $site.'/product/'.$p['post_name'].'/';
+  if(!empty($selected)){ $categoryUrl = rtrim($site,'/').'/'.$selected[0]['slug'].'/'; }
+  $productUrl = rtrim($site,'/').'/'.$p['post_name'].'/';
   $categoriesList = implode('، ', array_column($selected,'name'));
-  $catLinksHtml = '<ul>'; foreach($selected as $c){ $catLinksHtml.='<li><a href="'.$site.'/product-category/'.$c['slug'].'/">'.$c['name'].'</a></li>'; } $catLinksHtml.='</ul>';
+  $catLinksHtml = '<ul>'; foreach($selected as $c){ $catLinksHtml.='<li><a href="'.rtrim($site,'/').'/'.$c['slug'].'/">'.$c['name'].'</a></li>'; } $catLinksHtml.='</ul>';
   $internal1 = $site; $internal2 = $categoryUrl ?: $site;
   $external1='https://fa.wikipedia.org'; $external2='https://www.google.com'; $shippingNotes='';
   $seo_prompt = build_prompt(array(
@@ -989,8 +989,8 @@ case 'save_product':
   if($old_slug && $old_slug !== $slug){
     $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
     if($check && $check->num_rows){
-      $oldPath = '/product/'.$old_slug.'/';
-      $newPath = '/product/'.$slug.'/';
+      $oldPath = '/'.$old_slug.'/';
+      $newPath = '/'.$slug.'/';
       if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
         $redirect_success = true;
       }
@@ -1012,7 +1012,7 @@ case 'save_product':
     }
     $ldb->close();
   }
-  $product_url = (isset($_POST['product_url']) && $_POST['product_url']) ? $_POST['product_url'] : ('https://'.($_SERVER['HTTP_HOST'] ?? '').'/product/'.$slug.'/');
+  $product_url = (isset($_POST['product_url']) && $_POST['product_url']) ? $_POST['product_url'] : ('https://'.($_SERVER['HTTP_HOST'] ?? '').'/'.$slug.'/');
   $indexRes = google_index_url($product_url);
   echo json_encode(array('success'=>true,'redirect'=>$redirect_success,'indexed'=>$indexRes[0],'index_log'=>$indexRes[1]));
   $db->close();
@@ -1149,7 +1149,7 @@ case 'list_internal_links':
         while($cat=$res->fetch_assoc()){
           $slug = $db->real_escape_string($cat['slug']);
           $title = $db->real_escape_string($cat['name']);
-          $url = $db->real_escape_string($base.'/product-category/'.$cat['slug'].'/');
+          $url = $db->real_escape_string(rtrim($base,'/').'/'.$cat['slug'].'/');
           $db->query("INSERT INTO {$p}internal_links(category,url,title) VALUES('$slug','$url','$title') ON DUPLICATE KEY UPDATE url='$url', title='$title'");
         }
         $res->close();
