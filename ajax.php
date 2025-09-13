@@ -55,7 +55,7 @@ case 'login':
     $_SESSION['permissions'] = $row['permissions'];
     $_SESSION['logdb'] = $cfg;
     $mainCfg = secure_load_config();
-    if($mainCfg){ $_SESSION['db'] = $mainCfg; }
+  if($mainCfg){ $_SESSION['db'] = $mainCfg; }
     log_event('login');
     echo json_encode(array('success'=>true));
   } else {
@@ -609,12 +609,12 @@ case 'assign_manual':
   $inserted=0; $conflicts=array();
   foreach($arr as $pid){
     $check = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$pid");
-    if($check && $check->num_rows){
+  if($check && $check->num_rows){
       $assigned = intval($check->fetch_assoc()['user_id']);
       if($assigned != $user){ $conflicts[]=$pid; continue; }
     }
     $stmt = $ldb->prepare("INSERT INTO {$lp}product_assignments (user_id,product_id) VALUES (?,?)");
-    if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
+  if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
   }
   $ldb->close();
   if($conflicts){ echo json_encode(array('success'=>false,'message'=>'برخی محصولات قبلاً اختصاص یافته‌اند')); }
@@ -678,7 +678,7 @@ case 'user_assignments':
   if($ids){
     $idlist = implode(',',$ids);
     $pres = $db->query("SELECT ID,post_title FROM {$wp}posts WHERE ID IN ($idlist)");
-    if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
+  if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
   }
   $db->close();
   $ldb->close();
@@ -780,28 +780,30 @@ case 'list_products':
   $perm = $_SESSION['permissions'] ?? '';
   $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'";
   if($perm !== 'all'){
-    $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
-    $lp = $_SESSION['logdb']['prefix'];
-    $uid = intval($_SESSION['user_id']);
-    $ids = array();
-    $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
-    if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
-    $ldb->close();
-    if($ids){
-      $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE ID IN (".implode(',',$ids).")";
+      $ldb = connect_local();
+      if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+      $lp = $_SESSION['logdb']['prefix'];
+      $uid = intval($_SESSION['user_id']);
+      $ids = array();
+      $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
+      if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
+      $ldb->close();
+      if($ids){
+        $query .= " AND ID IN (".implode(',', $ids).")";
+      }else{
+        // اگر هیچ تخصیصی وجود نداشته باشد هیچ محصولی نمایش داده نشود
+        $query .= " AND 1=0";
+      }
     }
-    // اگر هیچ تخصیصی وجود نداشته باشد همه محصولات نمایش داده می‌شوند
-  }
   try{
     $res = $db->query($query);
-    if(!$res){ throw new Exception($db->error); }
+  if(!$res){ throw new Exception($db->error); }
     $rows = array();
     $scheme = isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http';
     $site = $scheme.'://'.$_SERVER['HTTP_HOST'];
     $scores = array();
     $ldb = connect_local();
-    if($ldb){
+  if($ldb){
       $lp = $_SESSION['logdb']['prefix'];
       $scRes = $ldb->query("SELECT product_id,score FROM {$lp}product_seo_scores");
       if($scRes){ while($sc=$scRes->fetch_assoc()){ $scores[intval($sc['product_id'])]=intval($sc['score']); } $scRes->close(); }
@@ -901,14 +903,14 @@ case 'get_product':
   $perm = $_SESSION['permissions'] ?? '';
   if($perm !== 'all'){
     $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
     $lp = $_SESSION['logdb']['prefix'];
     $uid = intval($_SESSION['user_id']);
     $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
     $allowed = ($check && $check->num_rows>0);
     $check && $check->close();
     $ldb->close();
-    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
   }
   $pRes = $db->query("SELECT post_title,post_content,post_name FROM {$prefix}posts WHERE ID=$id");
   $p = $pRes ? $pRes->fetch_assoc() : null;
@@ -994,14 +996,14 @@ case 'save_product':
   $perm = $_SESSION['permissions'] ?? '';
   if($perm !== 'all'){
     $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
     $lp = $_SESSION['logdb']['prefix'];
     $uid = intval($_SESSION['user_id']);
     $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
     $allowed = ($check && $check->num_rows>0);
     $check && $check->close();
     $ldb->close();
-    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
   }
   $name = $db->real_escape_string($_POST['name']);
   $slug = $db->real_escape_string($_POST['slug']);
@@ -1054,7 +1056,7 @@ case 'save_product':
   $redirect_success = false;
   if($old_slug && $old_slug !== $slug){
     $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
-    if($check && $check->num_rows){
+  if($check && $check->num_rows){
       $oldPath = '/'.$old_slug.'/';
       $newPath = '/'.$slug.'/';
       if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
@@ -1071,7 +1073,7 @@ case 'save_product':
     $next = $vrow ? intval($vrow['v'])+1 : 1;
     $uid = intval($_SESSION['user_id']);
     $stmt = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
-    if($stmt){
+  if($stmt){
       $stmt->bind_param('issii',$id,$oldContent,$desc,$uid,$next);
       $stmt->execute();
       $stmt->close();
@@ -1102,7 +1104,7 @@ case 'analyze_product_seo':
   if($ldb){
     $lp = $_SESSION['logdb']['prefix'];
     $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
-    if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
+  if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
     $ldb->close();
   }
   $db->close();
@@ -1213,7 +1215,7 @@ case 'sync_internal_links':
   if($cfg){
     try{ $wdb = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
     catch(mysqli_sql_exception $e){ $wdb = null; }
-    if($wdb && !$wdb->connect_errno){
+  if($wdb && !$wdb->connect_errno){
       $wdb->set_charset('utf8mb4');
       $wp = $cfg['prefix'];
       $base = '';
@@ -1538,7 +1540,7 @@ default:
 function connect(){
   if(!isset($_SESSION['db'])){
     $cfg = secure_load_config();
-    if(!$cfg){
+  if(!$cfg){
       echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده'));
       return false;
     }
@@ -1575,7 +1577,7 @@ function secure_load_config(){
 function connect_local(){
   if(!isset($_SESSION['logdb'])){
     $cfg = secure_load_local_config();
-    if(!$cfg) return false;
+  if(!$cfg) return false;
     $_SESSION['logdb'] = $cfg;
   } else {
     $cfg = $_SESSION['logdb'];
@@ -1606,6 +1608,32 @@ function init_local_tables($db,$prefix){
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}process_queue (id INT AUTO_INCREMENT PRIMARY KEY, process_name VARCHAR(255), status ENUM('pending','running','completed','failed') DEFAULT 'pending', started_at DATETIME NULL, finished_at DATETIME NULL, result TEXT NULL)");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}internal_links (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(191) UNIQUE, url TEXT, title VARCHAR(191))");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}external_links (id INT AUTO_INCREMENT PRIMARY KEY, url TEXT, title VARCHAR(191))");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}search_console_daily (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE,
+        site_url VARCHAR(255),
+        page VARCHAR(2083),
+        query VARCHAR(255),
+        device VARCHAR(20),
+        country VARCHAR(10),
+        clicks INT,
+        impressions INT,
+        ctr DECIMAL(5,2),
+        position DECIMAL(8,2),
+        search_appearance VARCHAR(50),
+        sessions INT NULL,
+        bounce_rate DECIMAL(5,2) NULL,
+        avg_session_duration INT NULL,
+        conversions INT NULL,
+        lcp DECIMAL(6,3) NULL,
+        cls DECIMAL(5,3) NULL,
+        fid DECIMAL(6,3) NULL,
+        ttfb DECIMAL(6,3) NULL,
+        referring_domains INT NULL,
+        anchors TEXT NULL,
+        trends_interest INT NULL,
+        UNIQUE KEY uniq (date,site_url,page(191),query(191),device,country,search_appearance)
+  ) CHARACTER SET utf8mb4");
 }
 
 function seed_content_history_if_empty($db,$prefix){
@@ -1675,7 +1703,7 @@ function google_index_url($url){
   }
   if(!$token){
     $db = connect_local();
-    if($db){
+  if($db){
       $prefix = $_SESSION['logdb']['prefix'];
       $cid = get_setting($db,$prefix,'sc_client_id');
       $secret = get_setting($db,$prefix,'sc_client_secret');
@@ -1730,7 +1758,7 @@ function log_event($action){
   if($key){
     $url = "https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$ip}";
     $resp = @file_get_contents($url);
-    if($resp){
+  if($resp){
       $data = json_decode($resp,true);
       if($data){
         $geo['country'] = $data['location']['country'] ?? '';
