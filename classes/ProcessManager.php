@@ -42,7 +42,7 @@ class ProcessManager {
         self::runSeoScore($steps);
         break;
       case 'gsc_fetch':
-        $steps[] = 'درخواست به Google API هنوز پیاده‌سازی نشده است';
+        self::runGscFetch($steps);
         break;
       default:
         $steps[] = 'فرایند ناشناخته';
@@ -103,6 +103,83 @@ class ProcessManager {
       $due = !$last || strtotime($last) + $interval*3600 <= time();
       if($due) self::run($p['name'],$steps);
     }
+  }
+  
+  private static function runGscFetch(&$steps){
+    $ldb = connect_local();
+    if(!$ldb){ $steps[]='اتصال پایگاه داده سامانه برقرار نشد'; return; }
+    $lp = $_SESSION['logdb']['prefix'];
+    $cid = self::getSetting($ldb,$lp,'sc_client_id');
+    $secret = self::getSetting($ldb,$lp,'sc_client_secret');
+    $refresh = self::getSetting($ldb,$lp,'sc_refresh_token');
+    $site = self::getSetting($ldb,$lp,'sc_site');
+    if(!$cid || !$secret || !$refresh || !$site){
+      $steps[]='تنظیمات سرچ کنسول ناقص است';
+      $ldb->close();
+      return;
+    }
+    $ch = curl_init('https://oauth2.googleapis.com/token');
+    curl_setopt_array($ch,array(
+      CURLOPT_POST=>true,
+      CURLOPT_POSTFIELDS=>http_build_query(array(
+        'client_id'=>$cid,
+        'client_secret'=>$secret,
+        'refresh_token'=>$refresh,
+        'grant_type'=>'refresh_token'
+      )),
+      CURLOPT_RETURNTRANSFER=>true
+    ));
+    $tok = curl_exec($ch);
+    curl_close($ch);
+    if($tok===false){ $steps[]='token request failed'; $ldb->close(); return; }
+    $tok=json_decode($tok,true);
+    $acc=$tok['access_token']??'';
+    if(!$acc){ $steps[]='access token missing'; $ldb->close(); return; }
+    $from=date('Y-m-d',strtotime('-7 days'));
+    $to=date('Y-m-d');
+    $payload=json_encode(array(
+      'startDate'=>$from,
+      'endDate'=>$to,
+      'dimensions'=>array('date'),
+      'rowLimit'=>250
+    ));
+    $ch=curl_init('https://searchconsole.googleapis.com/webmasters/v3/sites/'.urlencode($site).'/searchAnalytics/query');
+    curl_setopt_array($ch,array(
+      CURLOPT_POST=>true,
+      CURLOPT_HTTPHEADER=>array('Content-Type: application/json','Authorization: Bearer '.$acc),
+      CURLOPT_POSTFIELDS=>$payload,
+      CURLOPT_RETURNTRANSFER=>true
+    ));
+    $resp=curl_exec($ch);
+    $http=curl_getinfo($ch,CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if($resp===false || $http!=200){ $steps[]='API request failed'; $ldb->close(); return; }
+    $resp=json_decode($resp,true);
+    $rows=$resp['rows']??array();
+    $sumClicks=0;$sumImpr=0;$sumPosWeighted=0;
+    foreach($rows as $r){
+      $clicks=$r['clicks']??0; $impr=$r['impressions']??0; $pos=$r['position']??0;
+      $sumClicks+=$clicks; $sumImpr+=$impr; $sumPosWeighted+=$pos*$impr;
+    }
+    $avgCtr=$sumImpr>0?round($sumClicks/$sumImpr*100,2):0;
+    $avgPos=$sumImpr>0?round($sumPosWeighted/$sumImpr,2):0;
+    $summary=array('start'=>$from,'end'=>$to,'clicks'=>$sumClicks,'impressions'=>$sumImpr,'ctr'=>$avgCtr,'position'=>$avgPos);
+    $json=json_encode($summary,JSON_UNESCAPED_UNICODE);
+    $stmt=$ldb->prepare("INSERT INTO {$lp}settings(name,value) VALUES('sc_last_summary',?) ON DUPLICATE KEY UPDATE value=VALUES(value)");
+    if($stmt){ $stmt->bind_param('s',$json); $stmt->execute(); $stmt->close(); }
+    $steps[]='داده‌های سرچ کنسول ذخیره شد';
+    $ldb->close();
+  }
+
+  private static function getSetting($db,$prefix,$name){
+    $stmt=$db->prepare("SELECT value FROM {$prefix}settings WHERE name=?");
+    if(!$stmt) return null;
+    $stmt->bind_param('s',$name);
+    $stmt->execute();
+    $res=$stmt->get_result();
+    $row=$res?$res->fetch_assoc():null;
+    $stmt->close();
+    return $row?$row['value']:null;
   }
 }
 ?>
