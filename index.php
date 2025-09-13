@@ -68,7 +68,7 @@ footer{font-size:.9rem; margin-top:auto;}
 .yoast-good{background:#7ad03a;color:#fff;}
 .yoast-none{background:#999;color:#fff;}
 #priceEdit{padding-bottom:3rem;}
-#priceGrid{direction:rtl;font-family:'Vazirmatn',sans-serif;font-size:16px;}
+#priceGrid{direction:rtl;font-family:Tahoma,sans-serif;font-size:18px;}
 .ag-theme-alpine .ag-cell{text-align:right;}
 .ag-theme-alpine .text-center{text-align:center!important;}
 #priceSearch{width:100%;padding:.75rem 1rem;font-size:1.1rem;box-shadow:0 0 6px rgba(0,0,0,.15);border:1px solid #ced4da;border-radius:.25rem;margin-bottom:1rem;}
@@ -1751,17 +1751,20 @@ function initPriceGrid(){
   priceGridOptions={
     columnDefs:[
       {headerName:'تصویر', field:'image', width:90, sortable:false, filter:false,
-       cellRenderer:params=>params.value?`<img src="${params.value}" style="height:40px" loading="lazy">`:''},
-      {headerName:'نام محصول', field:'name', flex:1},
+       cellRenderer:params=>params.value?`<img src="${params.value}" style="height:40px" loading="lazy">`:'', cellClass:'text-center'},
+      {headerName:'نام محصول', field:'name', flex:1, cellClass:'text-end'},
       {headerName:'قیمت', field:'price', width:150, editable:true, cellClass:'text-center',
        valueFormatter:p=>p.value?Number(p.value).toLocaleString('en-US'):'' ,
        valueParser:p=>p.newValue.replace(/[^0-9]/g,'')}
     ],
     defaultColDef:{resizable:true},
+    enableRtl:true,
     rowHeight:60,
     pagination:true,
     paginationPageSize:15,
     overlayLoadingTemplate:'<span class="ag-overlay-loading-center">لطفاً صبر کنید... محصولات در حال بارگذاری هستند.</span>',
+    localeText:{noRowsToShow:''},
+    suppressNoRowsOverlay:true,
     onCellValueChanged:function(e){
       $.post('ajax.php',{action:'update_price',id:e.data.id,price:e.newValue},null,'json')
         .done(function(res){
