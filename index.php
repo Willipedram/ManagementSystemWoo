@@ -27,9 +27,9 @@ $canViewAssignments = in_array('all',$permissions) || in_array('view_assignments
 <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
-<link rel="stylesheet" href="https://cdn.datatables.net/editor/2.2.2/css/editor.bootstrap5.min.css">
-<script src="https://cdn.datatables.net/editor/2.2.2/js/dataTables.editor.min.js"></script>
-<script src="https://cdn.datatables.net/editor/2.2.2/js/editor.bootstrap5.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.3/styles/ag-grid.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.3/styles/ag-theme-alpine.css">
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.3/dist/ag-grid-community.min.noStyle.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/toastr.js/latest/toastr.min.js"></script>
@@ -68,10 +68,9 @@ footer{font-size:.9rem; margin-top:auto;}
 .yoast-good{background:#7ad03a;color:#fff;}
 .yoast-none{background:#999;color:#fff;}
 #priceEdit{padding-bottom:3rem;}
-#priceTable{direction:rtl;font-family:'Vazirmatn',sans-serif;font-size:16px;}
-#priceTable th{text-align:right;}
-#priceTable td:nth-child(2){text-align:right;}
-#priceTable td:nth-child(3){text-align:center;}
+#priceGrid{direction:rtl;font-family:'Vazirmatn',sans-serif;font-size:16px;}
+.ag-theme-alpine .ag-cell{text-align:right;}
+.ag-theme-alpine .text-center{text-align:center!important;}
 #priceSearch{width:100%;padding:.75rem 1rem;font-size:1.1rem;box-shadow:0 0 6px rgba(0,0,0,.15);border:1px solid #ced4da;border-radius:.25rem;margin-bottom:1rem;}
 </style>
 </head>
@@ -529,10 +528,7 @@ $('#local-connect-btn').click(function(){
         <option value="-1">همه</option>
       </select>
     </div>
-    <table id="priceTable" class="table table-striped table-bordered w-100">
-      <thead><tr><th>تصویر</th><th>نام محصول</th><th>قیمت</th></tr></thead>
-      <tbody><tr id="priceLoading"><td colspan="3" class="text-center">لطفاً صبر کنید... محصولات در حال بارگذاری هستند.</td></tr></tbody>
-    </table>
+    <div id="priceGrid" class="ag-theme-alpine w-100" style="height:600px"></div>
   </div>
   <div class="tab-pane fade p-3" id="users">
     <div class="d-flex justify-content-end mb-3">
@@ -1694,7 +1690,7 @@ $(document).ajaxStart(()=>NProgress.start());
 $(document).ajaxStop(()=>NProgress.done());
 function debounce(fn,delay){let t;return function(){clearTimeout(t);t=setTimeout(()=>fn.apply(this,arguments),delay);};}
 // DataTables tables
-let productsTable, usersTable, logsTable, userLogDataTable, assignUsersTable, assignedProductsTable, searchConsoleTable, scChart, rolesTable, processesTable, queueTable, priceTable, priceEditor;
+let productsTable, usersTable, logsTable, userLogDataTable, assignUsersTable, assignedProductsTable, searchConsoleTable, scChart, rolesTable, processesTable, queueTable, priceGrid, priceGridOptions;
 let productsInit=false, usersInit=false, assignmentsInit=false, logsInit=false, scKeywordsInit=false, priceInit=false;
 function initProducts(){
   productsTable=$('#productsTable').DataTable({
@@ -1751,76 +1747,58 @@ function loadProducts(){
   }).catch(()=>{}).finally(()=>{toastr.clear(toast);NProgress.done();});
 }
 
-function initPriceTable(){
-  priceEditor=new $.fn.dataTable.Editor({
-    ajax:function(method,url,data,success,error){
-      if(data.action==='edit'){
-        const id=Object.keys(data.data)[0];
-        const val=data.data[id].price;
-        $.post('ajax.php',{action:'update_price',id:id,price:val},function(res){
-          if(res.steps){ res.steps.forEach(s=>logStep('PriceUpdate: '+s)); }
-          if(res.success){ success({data:[{id:id,price:val}]}); toastr.success('ذخیره شد'); }
-          else { error(res.message); toastr.error(res.message||'خطا'); }
-        },'json');
-      } else {
-        $.post('ajax.php',{action:'list_prices'},function(res){
-          if(res.steps){ res.steps.forEach(s=>logStep('PriceList: '+s)); }
-          if(res.success){ success(res); }
-          else { error(res.message); }
-        },'json');
-      }
-    },
-    table:'#priceTable',
-    idSrc:'id',
-    fields:[{label:'قیمت',name:'price'}]
-  });
-
-  priceTable=$('#priceTable').DataTable({
-    ajax:{
-      url:'ajax.php', type:'POST',
-      data:function(){return {action:'list_prices'};},
-      dataSrc:function(res){
-        if(res.steps){ res.steps.forEach(s=>logStep('PriceList: '+s)); }
-        if(!res.success){ toastr.error(res.message||'خطا'); return []; }
-        return res.data;
-      },
-      error:function(){ logStep('PriceList: ajax error'); $('#priceLoading').remove(); }
-    },
-    rowId:'id',
-    columns:[
-      {data:'image', render:data=>data?`<img src="${data}" style="height:40px" loading="lazy">`:''},
-      {data:'name'},
-      {data:'price', className:'text-center edit-price', render:data=>Number(data||0).toLocaleString('en-US')}
+function initPriceGrid(){
+  priceGridOptions={
+    columnDefs:[
+      {headerName:'تصویر', field:'image', width:90, sortable:false, filter:false,
+       cellRenderer:params=>params.value?`<img src="${params.value}" style="height:40px" loading="lazy">`:''},
+      {headerName:'نام محصول', field:'name', flex:1},
+      {headerName:'قیمت', field:'price', width:150, editable:true, cellClass:'text-center',
+       valueFormatter:p=>p.value?Number(p.value).toLocaleString('en-US'):'' ,
+       valueParser:p=>p.newValue.replace(/[^0-9]/g,'')}
     ],
-    paging:true,
-    pageLength:15,
-    lengthMenu:[[15,30,50,-1],[15,30,50,'همه']],
-    searching:true,
-    ordering:false,
-    processing:true,
-    language:{emptyTable:'',zeroRecords:'هیچ محصولی یافت نشد',loadingRecords:'',processing:'لطفاً صبر کنید... محصولات در حال بارگذاری هستند.'},
-    info:false,
-    initComplete:function(){ $('#priceSearch').trigger('input'); }
-  });
-
-  $('#priceSearch').on('input', function(){ priceTable.search(this.value).draw(); });
-  $('#pricePageSize').on('change', function(){ priceTable.page.len($(this).val()).draw(); });
-
-  $('#priceTable').on('click','td.edit-price',function(){ $(this).attr('tabindex',0).focus(); });
-  $('#priceTable').on('dblclick','td.edit-price',function(){ priceEditor.inline(this,{onBlur:'submit'}); });
-  $('#priceTable').on('keydown','td.edit-price',function(e){ if(e.key==='Enter'){ priceEditor.inline(this,{onBlur:'submit'}); } });
-
-  priceEditor.on('submitSuccess',function(e,json,data){
-    const id=Object.keys(data.data)[0];
-    const newVal=data.data[id].price;
-    priceTable.cell('#'+id,2).data(Number(newVal).toLocaleString('en-US')).draw(false);
-    const next=priceTable.row('#'+id).index()+1;
-    if(next<priceTable.rows().count()){
-      const cell=priceTable.cell(next,2);
-      priceEditor.inline(cell.node(),{onBlur:'submit'});
+    defaultColDef:{resizable:true},
+    rowHeight:60,
+    pagination:true,
+    paginationPageSize:15,
+    overlayLoadingTemplate:'<span class="ag-overlay-loading-center">لطفاً صبر کنید... محصولات در حال بارگذاری هستند.</span>',
+    onCellValueChanged:function(e){
+      $.post('ajax.php',{action:'update_price',id:e.data.id,price:e.newValue},function(res){
+        if(res.steps){ res.steps.forEach(s=>logStep('PriceUpdate: '+s)); }
+        if(res.success){
+          toastr.success('ذخیره شد');
+          const next=e.rowIndex+1;
+          const nextRow=e.api.getDisplayedRowAtIndex(next);
+          if(nextRow){ e.api.startEditingCell({rowIndex:next,colKey:'price'}); }
+        }else{
+          toastr.error(res.message||'خطا');
+          e.node.setDataValue('price',e.oldValue);
+        }
+      },'json');
+    },
+    onCellKeyDown:function(e){
+      if(e.event.key==='Escape'){ e.api.stopEditing(true); }
     }
-  });
-  priceTable.on('xhr.dt',function(){ $('#priceLoading').remove(); });
+  };
+  const gridDiv=document.getElementById('priceGrid');
+  priceGrid=new agGrid.Grid(gridDiv,priceGridOptions);
+  loadPriceGrid();
+  $('#priceSearch').on('input', function(){ priceGridOptions.api.setQuickFilter(this.value); });
+  $('#pricePageSize').on('change', function(){ priceGridOptions.api.paginationSetPageSize(parseInt(this.value,10)); });
+}
+
+function loadPriceGrid(){
+  priceGridOptions.api.showLoadingOverlay();
+  $.post('ajax.php',{action:'list_prices'},function(res){
+    if(res.steps){ res.steps.forEach(s=>logStep('PriceList: '+s)); }
+    if(res.success){
+      priceGridOptions.api.setRowData(res.data);
+    }else{
+      toastr.error(res.message||'خطا');
+      priceGridOptions.api.setRowData([]);
+    }
+    priceGridOptions.api.hideOverlay();
+  },'json');
 }
 
 let historyTable;
@@ -2412,7 +2390,7 @@ $('button[data-bs-toggle="tab"]').on('shown.bs.tab',function(e){
     if(!scKeywordsInit){initSearchConsole(); scKeywordsInit=true;}
     loadSearchConsole();
   }else if(t==='#priceEdit'){
-    if(!priceInit){initPriceTable(); priceInit=true;}
+    if(!priceInit){initPriceGrid(); priceInit=true;}
   }
 });
 $('#scNav button[data-bs-toggle="tab"]').on('shown.bs.tab',function(e){
