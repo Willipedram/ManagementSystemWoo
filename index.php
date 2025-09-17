@@ -1220,13 +1220,19 @@ $('#local-connect-btn').click(function(){
        </div>
        <div class="mb-3">
        <label class="form-label">نامک محصول</label>
-        <div class="input-group">
+       <div class="input-group">
            <input type="text" id="prod_slug" class="form-control" <?php if(!$canEditSlug) echo 'disabled';?>>
            <?php if($canEditSlug): ?>
            <button class="btn btn-outline-secondary" type="button" id="editSlug">ویرایش</button>
            <button class="btn btn-outline-secondary" type="button" id="genSlug">ایجاد نامک انگلیسی</button>
            <?php endif; ?>
          </div>
+          <div class="text-end mt-2">
+            <button type="button" class="btn btn-outline-primary btn-sm d-inline-flex align-items-center justify-content-center gap-2" id="quickCopyPrompt">
+              <i class="fa-solid fa-robot"></i>
+              <span>کپی پرامپت هوش مصنوعی</span>
+            </button>
+          </div>
        </div>
        <div class="mb-3">
          <label class="form-label">توضیحات</label>
@@ -1346,9 +1352,21 @@ $('#prod_price').on('input',function(){
   let v=$(this).val().replace(/[^0-9]/g,'');
   if(v) $(this).val(v.replace(/\B(?=(\d{3})+(?!\d))/g,','));
 });
-$('#copyPrompt').click(function(){
-  navigator.clipboard.writeText($('#seo_prompt').val());
-  toastr.info('کپی شد');
+function copySeoPrompt(){
+  const promptText=$('#seo_prompt').val();
+  if(!promptText){
+    toastr.warning('پرامپتی برای کپی موجود نیست');
+    return;
+  }
+  navigator.clipboard.writeText(promptText).then(()=>{
+    toastr.info('پرامپت هوش مصنوعی کپی شد');
+  }).catch(()=>{
+    toastr.error('امکان کپی پرامپت فراهم نشد');
+  });
+}
+
+$('#copyPrompt, #quickCopyPrompt').on('click',function(){
+  copySeoPrompt();
 });
 $('#editSlug').click(function(){ $('#prod_slug').prop('disabled',false).focus(); });
 $('#genSlug').click(function(){
