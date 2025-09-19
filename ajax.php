@@ -18,7 +18,8 @@ function has_perm($p){
 }
 
 function compute_seo_score($t,$d,$c,$f){
-  $a = SEOAnalyzer::analyze($t,$d,$c,$f);
+  $baseUrl = $_SESSION['site_base_url'] ?? '';
+  $a = SEOAnalyzer::analyze($t,$d,$c,$f,$baseUrl);
   return $a['score'] ?? 0;
 }
 
@@ -55,7 +56,7 @@ case 'login':
     $_SESSION['permissions'] = $row['permissions'];
     $_SESSION['logdb'] = $cfg;
     $mainCfg = secure_load_config();
-    if($mainCfg){ $_SESSION['db'] = $mainCfg; }
+  if($mainCfg){ $_SESSION['db'] = $mainCfg; }
     log_event('login');
     echo json_encode(array('success'=>true));
   } else {
@@ -609,12 +610,12 @@ case 'assign_manual':
   $inserted=0; $conflicts=array();
   foreach($arr as $pid){
     $check = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$pid");
-    if($check && $check->num_rows){
+  if($check && $check->num_rows){
       $assigned = intval($check->fetch_assoc()['user_id']);
       if($assigned != $user){ $conflicts[]=$pid; continue; }
     }
     $stmt = $ldb->prepare("INSERT INTO {$lp}product_assignments (user_id,product_id) VALUES (?,?)");
-    if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
+  if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
   }
   $ldb->close();
   if($conflicts){ echo json_encode(array('success'=>false,'message'=>'برخی محصولات قبلاً اختصاص یافته‌اند')); }
@@ -678,7 +679,7 @@ case 'user_assignments':
   if($ids){
     $idlist = implode(',',$ids);
     $pres = $db->query("SELECT ID,post_title FROM {$wp}posts WHERE ID IN ($idlist)");
-    if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
+  if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
   }
   $db->close();
   $ldb->close();
@@ -780,28 +781,30 @@ case 'list_products':
   $perm = $_SESSION['permissions'] ?? '';
   $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'";
   if($perm !== 'all'){
-    $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
-    $lp = $_SESSION['logdb']['prefix'];
-    $uid = intval($_SESSION['user_id']);
-    $ids = array();
-    $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
-    if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
-    $ldb->close();
-    if($ids){
-      $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE ID IN (".implode(',',$ids).")";
+      $ldb = connect_local();
+      if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+      $lp = $_SESSION['logdb']['prefix'];
+      $uid = intval($_SESSION['user_id']);
+      $ids = array();
+      $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
+      if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
+      $ldb->close();
+      if($ids){
+        $query .= " AND ID IN (".implode(',', $ids).")";
+      }else{
+        // اگر هیچ تخصیصی وجود نداشته باشد هیچ محصولی نمایش داده نشود
+        $query .= " AND 1=0";
+      }
     }
-    // اگر هیچ تخصیصی وجود نداشته باشد همه محصولات نمایش داده می‌شوند
-  }
   try{
     $res = $db->query($query);
-    if(!$res){ throw new Exception($db->error); }
+  if(!$res){ throw new Exception($db->error); }
     $rows = array();
     $scheme = isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http';
     $site = $scheme.'://'.$_SERVER['HTTP_HOST'];
     $scores = array();
     $ldb = connect_local();
-    if($ldb){
+  if($ldb){
       $lp = $_SESSION['logdb']['prefix'];
       $scRes = $ldb->query("SELECT product_id,score FROM {$lp}product_seo_scores");
       if($scRes){ while($sc=$scRes->fetch_assoc()){ $scores[intval($sc['product_id'])]=intval($sc['score']); } $scRes->close(); }
@@ -901,14 +904,14 @@ case 'get_product':
   $perm = $_SESSION['permissions'] ?? '';
   if($perm !== 'all'){
     $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
     $lp = $_SESSION['logdb']['prefix'];
     $uid = intval($_SESSION['user_id']);
     $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
     $allowed = ($check && $check->num_rows>0);
     $check && $check->close();
     $ldb->close();
-    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
   }
   $pRes = $db->query("SELECT post_title,post_content,post_name FROM {$prefix}posts WHERE ID=$id");
   $p = $pRes ? $pRes->fetch_assoc() : null;
@@ -971,7 +974,8 @@ case 'get_product':
     '{{RELATED_TOPIC_1}}'=>'',
     '{{RELATED_TOPIC_2}}'=>''
   ), $selected, $p['post_content']);
-  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $primaryKeyword ?: $p['post_title']);
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $primaryKeyword ?: $p['post_title'], $siteBase);
   echo json_encode(array(
     'success'=>true,
     'product'=>array('id'=>$id,'name'=>$p['post_title'],'slug'=>$p['post_name'],'description'=>$p['post_content'],'price'=>$price),
@@ -991,27 +995,71 @@ case 'save_product':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
   $id = intval($_POST['id']);
+  $nameRaw = $_POST['name'] ?? '';
+  $slugRaw = $_POST['slug'] ?? '';
+  $oldSlugInput = $_POST['old_slug'] ?? '';
+  $descRaw = $_POST['description'] ?? '';
+  $priceRaw = $_POST['price'] ?? '';
+  $stockRaw = $_POST['stock_status'] ?? '';
+  $seoTitleInput = $_POST['seo_title'] ?? '';
+  $seoDescInput = $_POST['seo_desc'] ?? '';
+  $focusKwInput = $_POST['focus_kw'] ?? '';
   $perm = $_SESSION['permissions'] ?? '';
-  if($perm !== 'all'){
-    $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
-    $lp = $_SESSION['logdb']['prefix'];
-    $uid = intval($_SESSION['user_id']);
-    $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
-    $allowed = ($check && $check->num_rows>0);
-    $check && $check->close();
-    $ldb->close();
-    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  $ldb = connect_local();
+  if(!$ldb){ $db->close(); echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  ensure_kpi_tables($ldb,$lp);
+  $uid = intval($_SESSION['user_id']);
+  $assignedUserId = null;
+  $assignRes = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$id");
+  if($assignRes){
+    $assignRow = $assignRes->fetch_assoc();
+    if($assignRow && $assignRow['user_id'] !== null){ $assignedUserId = intval($assignRow['user_id']); }
+    $assignRes->close();
   }
-  $name = $db->real_escape_string($_POST['name']);
-  $slug = $db->real_escape_string($_POST['slug']);
-  $old_slug = isset($_POST['old_slug']) ? $db->real_escape_string($_POST['old_slug']) : '';
-  $desc = $db->real_escape_string($_POST['description']);
-  $price = $db->real_escape_string($_POST['price']);
-  $stock = $db->real_escape_string($_POST['stock_status']);
-  $oldRes = $db->query("SELECT post_content FROM {$prefix}posts WHERE ID=$id");
-  $oldRow = $oldRes ? $oldRes->fetch_assoc() : null;
-  $oldContent = $oldRow ? $oldRow['post_content'] : '';
+  if($perm !== 'all' && $assignedUserId !== $uid){
+    $ldb->close();
+    $db->close();
+    echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز'));
+    break;
+  }
+  $prodRes = $db->query("SELECT post_title, post_name, post_content FROM {$prefix}posts WHERE ID=$id");
+  $prodRow = $prodRes ? $prodRes->fetch_assoc() : null;
+  if($prodRes){ $prodRes->close(); }
+  $oldName = $prodRow ? $prodRow['post_title'] : '';
+  $oldContent = $prodRow ? $prodRow['post_content'] : '';
+  $oldSlug = $prodRow ? $prodRow['post_name'] : '';
+  $metaMap = array();
+  $metaRes = $db->query("SELECT meta_key, meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_title','_yoast_wpseo_metadesc','_yoast_wpseo_focuskw')");
+  if($metaRes){
+    while($m = $metaRes->fetch_assoc()){
+      $metaMap[$m['meta_key']] = $m['meta_value'];
+    }
+    $metaRes->close();
+  }
+  $oldSeoTitle = $metaMap['_yoast_wpseo_title'] ?? $oldName;
+  $oldSeoDesc = $metaMap['_yoast_wpseo_metadesc'] ?? '';
+  $oldFocus = $metaMap['_yoast_wpseo_focuskw'] ?? $oldName;
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $oldScore = null;
+  $scoreRes = $ldb->query("SELECT score FROM {$lp}product_seo_scores WHERE product_id=$id");
+  if($scoreRes){
+    $scoreRow = $scoreRes->fetch_assoc();
+    if($scoreRow && $scoreRow['score'] !== null){ $oldScore = floatval($scoreRow['score']); }
+    $scoreRes->close();
+  }
+  if($oldScore === null){
+    $analysisBefore = SEOAnalyzer::analyze($oldSeoTitle ?: $oldName, $oldSeoDesc, $oldContent, $oldFocus ?: $oldName, $siteBase);
+    $oldScore = $analysisBefore['score'];
+  }
+  $wordsBefore = estimate_word_count($oldContent);
+  $name = $db->real_escape_string($nameRaw);
+  $slug = $db->real_escape_string($slugRaw);
+  $old_slug = $db->real_escape_string($oldSlugInput);
+  $desc = $db->real_escape_string($descRaw);
+  $priceClean = preg_replace('/[^0-9.]/','',$priceRaw);
+  $price = $db->real_escape_string($priceClean);
+  $stock = $db->real_escape_string($stockRaw);
   $db->query("UPDATE {$prefix}posts SET post_title='$name', post_name='$slug', post_content='$desc' WHERE ID=$id");
   $meta = $db->query("SELECT meta_id FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_price'");
   if($meta && $meta->num_rows){
@@ -1019,24 +1067,26 @@ case 'save_product':
   }else{
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_price','$price')");
   }
+  if($meta){ $meta->close(); }
   $meta = $db->query("SELECT meta_id FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_stock_status'");
   if($meta && $meta->num_rows){
     $db->query("UPDATE {$prefix}postmeta SET meta_value='$stock' WHERE post_id=$id AND meta_key='_stock_status'");
   }else{
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_stock_status','$stock')");
   }
+  if($meta){ $meta->close(); }
   $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_title','_yoast_wpseo_metadesc')");
-  if(isset($_POST['seo_title'])){
-    $st = $db->real_escape_string($_POST['seo_title']);
+  if($seoTitleInput !== ''){
+    $st = $db->real_escape_string($seoTitleInput);
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_title','$st')");
   }
-  if(isset($_POST['seo_desc'])){
-    $sd = $db->real_escape_string($_POST['seo_desc']);
+  if($seoDescInput !== ''){
+    $sd = $db->real_escape_string($seoDescInput);
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metadesc','$sd')");
   }
   $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
-  if(isset($_POST['focus_kw'])){
-    $fk = $db->real_escape_string($_POST['focus_kw']);
+  if($focusKwInput !== ''){
+    $fk = $db->real_escape_string($focusKwInput);
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_focuskw','$fk')");
   }
   $db->query("DELETE tr FROM {$prefix}term_relationships tr JOIN {$prefix}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id WHERE tr.object_id=$id AND tt.taxonomy='product_cat'");
@@ -1049,37 +1099,75 @@ case 'save_product':
          $ttid = $tt['term_taxonomy_id'];
          $db->query("INSERT INTO {$prefix}term_relationships (object_id,term_taxonomy_id) VALUES ($id,$ttid)");
        }
+       if($ttRes){ $ttRes->close(); }
      }
   }
   $redirect_success = false;
-  if($old_slug && $old_slug !== $slug){
+  if($oldSlugInput && $oldSlugInput !== $slugRaw){
     $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
     if($check && $check->num_rows){
-      $oldPath = '/'.$old_slug.'/';
+      $oldPath = '/'.$db->real_escape_string($oldSlugInput).'/';
       $newPath = '/'.$slug.'/';
       if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
         $redirect_success = true;
       }
     }
+    if($check){ $check->close(); }
   }
-  // log content history
-  $ldb = connect_local();
-  if($ldb){
-    $lp = $_SESSION['logdb']['prefix'];
-    $vres = $ldb->query("SELECT MAX(version) v FROM {$lp}product_content_history WHERE product_id=$id");
-    $vrow = $vres ? $vres->fetch_assoc() : null;
-    $next = $vrow ? intval($vrow['v'])+1 : 1;
-    $uid = intval($_SESSION['user_id']);
-    $stmt = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
-    if($stmt){
-      $stmt->bind_param('issii',$id,$oldContent,$desc,$uid,$next);
-      $stmt->execute();
-      $stmt->close();
+  $vres = $ldb->query("SELECT MAX(version) v FROM {$lp}product_content_history WHERE product_id=$id");
+  $vrow = $vres ? $vres->fetch_assoc() : null;
+  $next = $vrow ? intval($vrow['v'])+1 : 1;
+  if($vres){ $vres->close(); }
+  $stmtHist = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
+  $historyId = 0;
+  if($stmtHist){
+    $stmtHist->bind_param('issii',$id,$oldContent,$descRaw,$uid,$next);
+    $stmtHist->execute();
+    $historyId = $stmtHist->insert_id ?: $ldb->insert_id;
+    $stmtHist->close();
+  }
+  $analysisAfter = SEOAnalyzer::analyze($seoTitleInput ?: $nameRaw, $seoDescInput, $descRaw, $focusKwInput ?: $nameRaw, $siteBase);
+  $newScore = $analysisAfter['score'];
+  $detailsJson = json_encode($analysisAfter['details'],JSON_UNESCAPED_UNICODE);
+  $stmtScore = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
+  if($stmtScore){
+    $newScoreInt = intval($newScore);
+    $stmtScore->bind_param('iis',$id,$newScoreInt,$detailsJson);
+    $stmtScore->execute();
+    $stmtScore->close();
+  }
+  $wordsAfter = estimate_word_count($descRaw);
+  $wordDelta = $wordsAfter - $wordsBefore;
+  $wordsAdded = $wordDelta > 0 ? $wordDelta : 0;
+  $improvement = $newScore - $oldScore;
+  $activityMinutes = estimate_activity_minutes($wordsBefore,$wordsAfter);
+  if($historyId){
+    $assignedBind = $assignedUserId !== null ? intval($assignedUserId) : 0;
+    $editedAt = date('Y-m-d H:i:s');
+    $seoBeforeVal = $oldScore !== null ? floatval($oldScore) : 0;
+    $seoAfterVal = floatval($newScore);
+    $improvementVal = ($oldScore !== null) ? floatval($improvement) : 0;
+    $stmtEvent = $ldb->prepare("INSERT INTO {$lp}user_kpi_events (history_id,user_id,product_id,assigned_user_id,edited_at,seo_before,seo_after,seo_improvement,words_before,words_after,words_delta,words_added,activity_minutes) VALUES (?,?,?,NULLIF(?,0),?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE assigned_user_id=VALUES(assigned_user_id), seo_before=VALUES(seo_before), seo_after=VALUES(seo_after), seo_improvement=VALUES(seo_improvement), words_before=VALUES(words_before), words_after=VALUES(words_after), words_delta=VALUES(words_delta), words_added=VALUES(words_added), activity_minutes=VALUES(activity_minutes))");
+    if($stmtEvent){
+      $stmtEvent->bind_param('iiiisdddiiiid',$historyId,$uid,$id,$assignedBind,$editedAt,$seoBeforeVal,$seoAfterVal,$improvementVal,$wordsBefore,$wordsAfter,$wordDelta,$wordsAdded,$activityMinutes);
+      $stmtEvent->execute();
+      $stmtEvent->close();
     }
-    $ldb->close();
+  }
+  $assignedHit = ($assignedUserId !== null && $assignedUserId === $uid) ? 1 : 0;
+  $seoBeforeSum = $oldScore !== null ? floatval($oldScore) : 0;
+  $seoAfterSum = floatval($newScore);
+  $improvementSum = ($oldScore !== null) ? floatval($improvement) : 0;
+  $stmtDaily = $ldb->prepare("INSERT INTO {$lp}user_kpi_daily (date,user_id,total_edits,assigned_edits,seo_before_sum,seo_after_sum,improvement_sum,activity_minutes,words_added_sum,words_total_sum) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE total_edits=total_edits+VALUES(total_edits), assigned_edits=assigned_edits+VALUES(assigned_edits), seo_before_sum=seo_before_sum+VALUES(seo_before_sum), seo_after_sum=seo_after_sum+VALUES(seo_after_sum), improvement_sum=improvement_sum+VALUES(improvement_sum), activity_minutes=activity_minutes+VALUES(activity_minutes), words_added_sum=words_added_sum+VALUES(words_added_sum), words_total_sum=words_total_sum+VALUES(words_total_sum)");
+  if($stmtDaily){
+    $today = date('Y-m-d');
+    $stmtDaily->bind_param('siiiddddii',$today,$uid,1,$assignedHit,$seoBeforeSum,$seoAfterSum,$improvementSum,$activityMinutes,$wordsAdded,$wordsAfter);
+    $stmtDaily->execute();
+    $stmtDaily->close();
   }
   $product_url = (isset($_POST['product_url']) && $_POST['product_url']) ? $_POST['product_url'] : ('https://'.($_SERVER['HTTP_HOST'] ?? '').'/'.$slug.'/');
   $indexRes = google_index_url($product_url);
+  $ldb->close();
   echo json_encode(array('success'=>true,'redirect'=>$redirect_success,'indexed'=>$indexRes[0],'index_log'=>$indexRes[1]));
   $db->close();
   break;
@@ -1097,12 +1185,13 @@ case 'analyze_product_seo':
   $descRow = $descRes ? $descRes->fetch_assoc() : null; $seoDesc = ($descRow['meta_value'] ?? '');
   $focusRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
   $focusRow = $focusRes ? $focusRes->fetch_assoc() : null; $focus = ($focusRow['meta_value'] ?? $p['post_title']);
-  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus);
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus, $siteBase);
   $ldb = connect_local();
   if($ldb){
     $lp = $_SESSION['logdb']['prefix'];
     $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
-    if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
+  if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
     $ldb->close();
   }
   $db->close();
@@ -1114,7 +1203,8 @@ case 'analyze_seo':
   $desc  = $_POST['desc'] ?? '';
   $content = $_POST['content'] ?? '';
   $focus = $_POST['focus'] ?? $title;
-  $analysis = SEOAnalyzer::analyze($title,$desc,$content,$focus);
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $analysis = SEOAnalyzer::analyze($title,$desc,$content,$focus,$siteBase);
   echo json_encode(array('success'=>true,'data'=>$analysis,'suggestions'=>array('title'=>SEOAnalyzer::suggestTitle($title),'meta'=>SEOAnalyzer::suggestMeta($title))));
   break;
 
@@ -1124,6 +1214,7 @@ case 'bulk_analyze_product_seo':
   $res = $db->query("SELECT ID,post_title,post_content FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'");
   $count = 0;
   $ldb = connect_local();
+  $siteBase = $_SESSION['site_base_url'] ?? '';
   if($res){
     while($p=$res->fetch_assoc()){
       $id = intval($p['ID']);
@@ -1133,7 +1224,7 @@ case 'bulk_analyze_product_seo':
       $descRow = $descRes ? $descRes->fetch_assoc() : null; $seoDesc = ($descRow['meta_value'] ?? '');
       $focusRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
       $focusRow = $focusRes ? $focusRes->fetch_assoc() : null; $focus = ($focusRow['meta_value'] ?? $p['post_title']);
-      $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus);
+      $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus, $siteBase);
       if($ldb){
         $lp = $_SESSION['logdb']['prefix'];
         $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
@@ -1213,7 +1304,7 @@ case 'sync_internal_links':
   if($cfg){
     try{ $wdb = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
     catch(mysqli_sql_exception $e){ $wdb = null; }
-    if($wdb && !$wdb->connect_errno){
+  if($wdb && !$wdb->connect_errno){
       $wdb->set_charset('utf8mb4');
       $wp = $cfg['prefix'];
       $base = '';
@@ -1520,9 +1611,147 @@ case 'list_process_queue':
   $totalRes = $db->query("SELECT COUNT(*) c FROM {$prefix}posts WHERE post_type='product'");
   $total = $totalRes ? $totalRes->fetch_assoc()['c'] : 0;
  $price = array('labels'=>array('بدون قیمت','دارای قیمت'),'data'=>array($withoutPrice,$total-$withoutPrice));
- echo json_encode(array('success'=>true,'cat'=>$cat,'seo'=>$seo,'stock'=>$stock,'price'=>$price));
- $db->close();
- break;
+echo json_encode(array('success'=>true,'cat'=>$cat,'seo'=>$seo,'stock'=>$stock,'price'=>$price));
+$db->close();
+break;
+case 'user_kpi_summary':
+  if(!has_perm('view_kpis')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  date_default_timezone_set('Asia/Tehran');
+  $range = $_POST['range'] ?? 'day';
+  $validRanges = array('day','week','month');
+  if(!in_array($range,$validRanges)){ $range='day'; }
+  $end = date('Y-m-d');
+  $start = $end;
+  $rangeLabel = 'امروز';
+  if($range==='week'){ $start = date('Y-m-d',strtotime('-6 days',strtotime($end))); $rangeLabel='۷ روز اخیر'; }
+  elseif($range==='month'){ $start = date('Y-m-d',strtotime('-29 days',strtotime($end))); $rangeLabel='۳۰ روز اخیر'; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  ensure_kpi_tables($db,$prefix);
+  $manager = new UserManager($db,$prefix);
+  $usersList = $manager->all();
+  $userMap = array();
+  foreach($usersList as $u){
+    $uid = intval($u['id']);
+    $labelName = trim($u['full_name'] ?? '');
+    if(!$labelName){ $labelName = $u['username']; }
+    $userMap[$uid] = array('label'=>$labelName,'username'=>$u['username']);
+  }
+  $stmt = $db->prepare("SELECT user_id,SUM(total_edits) AS total_edits,SUM(assigned_edits) AS assigned_edits,SUM(seo_before_sum) AS seo_before_sum,SUM(seo_after_sum) AS seo_after_sum,SUM(improvement_sum) AS improvement_sum,SUM(activity_minutes) AS activity_minutes,SUM(words_added_sum) AS words_added_sum,SUM(words_total_sum) AS words_total_sum FROM {$prefix}user_kpi_daily WHERE date BETWEEN ? AND ? GROUP BY user_id");
+  $stmt->bind_param('ss',$start,$end);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $records = array();
+  $totalEditsRange = 0;
+  $totalImprovementSum = 0;
+  while($row=$res->fetch_assoc()){
+    $uid = intval($row['user_id']);
+    $edits = intval($row['total_edits']);
+    $avgBefore = $edits>0 ? round(floatval($row['seo_before_sum'])/$edits,2) : 0;
+    $avgAfter = $edits>0 ? round(floatval($row['seo_after_sum'])/$edits,2) : 0;
+    $imprAvg = $edits>0 ? round(floatval($row['improvement_sum'])/$edits,2) : 0;
+    $activity = round(floatval($row['activity_minutes']),2);
+    $wordsAdded = intval($row['words_added_sum']);
+    $wordsTotal = intval($row['words_total_sum']);
+    $assigned = intval($row['assigned_edits']);
+    $labelName = $userMap[$uid]['label'] ?? ('کاربر '.$uid);
+    $records[] = array(
+      'user_id'=>$uid,
+      'label'=>$labelName,
+      'username'=>$userMap[$uid]['username'] ?? '',
+      'total_edits'=>$edits,
+      'assigned_edits'=>$assigned,
+      'avg_before'=>$avgBefore,
+      'avg_after'=>$avgAfter,
+      'improvement_avg'=>$imprAvg,
+      'improvement_sum'=>round(floatval($row['improvement_sum']),2),
+      'activity_minutes'=>$activity,
+      'words_added'=>$wordsAdded,
+      'words_total'=>$wordsTotal
+    );
+    $totalEditsRange += $edits;
+    $totalImprovementSum += floatval($row['improvement_sum']);
+  }
+  $stmt->close();
+  $barOrder = $records;
+  usort($barOrder,function($a,$b){
+    if($b['total_edits'] === $a['total_edits']){
+      return $b['improvement_avg'] <=> $a['improvement_avg'];
+    }
+    return $b['total_edits'] <=> $a['total_edits'];
+  });
+  $barSlice = array_slice($barOrder,0,10);
+  $barLabels = array();
+  $barValues = array();
+  foreach($barSlice as $entry){
+    $barLabels[] = $entry['label'];
+    $barValues[] = $entry['total_edits'];
+  }
+  $pieLabels = array();
+  $pieValues = array();
+  foreach($barOrder as $entry){
+    $pieLabels[] = $entry['label'];
+    $pieValues[] = $entry['total_edits'];
+  }
+  $stmt = $db->prepare("SELECT date,user_id,total_edits,seo_after_sum FROM {$prefix}user_kpi_daily WHERE date BETWEEN ? AND ? ORDER BY date ASC");
+  $stmt->bind_param('ss',$start,$end);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $lineLabels = array();
+  $linePoints = array();
+  while($row=$res->fetch_assoc()){
+    $dateKey = $row['date'];
+    if(!in_array($dateKey,$lineLabels)){ $lineLabels[] = $dateKey; }
+    $uid = intval($row['user_id']);
+    if(!isset($linePoints[$uid])){ $linePoints[$uid] = array(); }
+    $avgAfterDay = intval($row['total_edits'])>0 ? round(floatval($row['seo_after_sum'])/intval($row['total_edits']),2) : null;
+    $linePoints[$uid][$dateKey] = $avgAfterDay;
+  }
+  $stmt->close();
+  $lineDatasets = array();
+  foreach($linePoints as $uid=>$points){
+    $series = array();
+    foreach($lineLabels as $d){ $series[] = array_key_exists($d,$points) ? $points[$d] : null; }
+    $lineDatasets[] = array(
+      'user_id'=>$uid,
+      'label'=>$userMap[$uid]['label'] ?? ('کاربر '.$uid),
+      'data'=>$series
+    );
+  }
+  $bestUser = array('name'=>'-','edits'=>0,'improvement'=>0);
+  if(!empty($barOrder)){
+    $top = $barOrder[0];
+    $bestUser['name'] = $top['label'];
+    $bestUser['edits'] = intval($top['total_edits']);
+    $bestUser['improvement'] = isset($top['improvement_sum']) ? floatval($top['improvement_sum']) : 0;
+  }
+  $updatedAt = null;
+  $lastRes = $db->query("SELECT MAX(edited_at) AS last_edit FROM {$prefix}user_kpi_events");
+  if($lastRes){ $lastRow = $lastRes->fetch_assoc(); if($lastRow && $lastRow['last_edit']){ $updatedAt = $lastRow['last_edit']; } $lastRes->close(); }
+  $cards = array(
+    'total_label'=>'مجموع ویرایش‌های '.$rangeLabel,
+    'total_edits'=>$totalEditsRange,
+    'best_label'=>$range==='day' ? 'بهترین کاربر امروز' : 'برترین کاربر '.$rangeLabel,
+    'best_user'=>$bestUser,
+    'avg_improvement_label'=>'میانگین بهبود کل',
+    'avg_improvement'=>$totalEditsRange>0 ? round($totalImprovementSum/$totalEditsRange,2) : 0
+  );
+  $leaderboard = $barOrder;
+  $db->close();
+  echo json_encode(array(
+    'success'=>true,
+    'range'=>$range,
+    'range_label'=>$rangeLabel,
+    'cards'=>$cards,
+    'bar'=>array('labels'=>$barLabels,'data'=>$barValues),
+    'pie'=>array('labels'=>$pieLabels,'data'=>$pieValues),
+    'line'=>array('labels'=>$lineLabels,'datasets'=>$lineDatasets),
+    'leaderboard'=>$leaderboard,
+    'total_edits'=>$totalEditsRange,
+    'updated_at'=>$updatedAt
+  ));
+  break;
 case 'check_config':
   $cfg = secure_load_config();
   if(!$cfg){ echo json_encode(array('success'=>false,'message'=>'تنظیمات موجود نیست')); break; }
@@ -1538,7 +1767,7 @@ default:
 function connect(){
   if(!isset($_SESSION['db'])){
     $cfg = secure_load_config();
-    if(!$cfg){
+  if(!$cfg){
       echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده'));
       return false;
     }
@@ -1557,6 +1786,24 @@ function connect(){
     return false;
   }
   $mysqli->set_charset('utf8mb4');
+  if(!isset($_SESSION['site_base_url']) || !$_SESSION['site_base_url']){
+    $site='';
+    $sql="SELECT option_name,option_value FROM {$cfg['prefix']}options WHERE option_name IN ('home','siteurl')";
+    if($optRes=$mysqli->query($sql)){
+      while($row=$optRes->fetch_assoc()){
+        $value=trim($row['option_value']);
+        if(!$value) continue;
+        $value=rtrim($value,'/');
+        if(!$site || $row['option_name']=='home'){
+          $site=$value;
+        }
+      }
+      $optRes->close();
+    }
+    if($site){
+      $_SESSION['site_base_url']=$site;
+    }
+  }
   return $mysqli;
 }
 
@@ -1575,7 +1822,7 @@ function secure_load_config(){
 function connect_local(){
   if(!isset($_SESSION['logdb'])){
     $cfg = secure_load_local_config();
-    if(!$cfg) return false;
+  if(!$cfg) return false;
     $_SESSION['logdb'] = $cfg;
   } else {
     $cfg = $_SESSION['logdb'];
@@ -1606,6 +1853,87 @@ function init_local_tables($db,$prefix){
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}process_queue (id INT AUTO_INCREMENT PRIMARY KEY, process_name VARCHAR(255), status ENUM('pending','running','completed','failed') DEFAULT 'pending', started_at DATETIME NULL, finished_at DATETIME NULL, result TEXT NULL)");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}internal_links (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(191) UNIQUE, url TEXT, title VARCHAR(191))");
   $db->query("CREATE TABLE IF NOT EXISTS {$prefix}external_links (id INT AUTO_INCREMENT PRIMARY KEY, url TEXT, title VARCHAR(191))");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}search_console_daily (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE,
+        site_url VARCHAR(255),
+        page VARCHAR(2083),
+        query VARCHAR(255),
+        device VARCHAR(20),
+        country VARCHAR(10),
+        clicks INT,
+        impressions INT,
+        ctr DECIMAL(5,2),
+        position DECIMAL(8,2),
+        search_appearance VARCHAR(50),
+        sessions INT NULL,
+        bounce_rate DECIMAL(5,2) NULL,
+        avg_session_duration INT NULL,
+        conversions INT NULL,
+        lcp DECIMAL(6,3) NULL,
+        cls DECIMAL(5,3) NULL,
+        fid DECIMAL(6,3) NULL,
+        ttfb DECIMAL(6,3) NULL,
+        referring_domains INT NULL,
+        anchors TEXT NULL,
+        trends_interest INT NULL,
+        UNIQUE KEY uniq (date,site_url,page(191),query(191),device,country,search_appearance)
+  ) CHARACTER SET utf8mb4");
+  ensure_kpi_tables($db,$prefix);
+}
+
+function ensure_kpi_tables($db,$prefix){
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}user_kpi_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    history_id BIGINT UNIQUE,
+    user_id INT,
+    product_id BIGINT,
+    assigned_user_id INT NULL,
+    edited_at DATETIME,
+    seo_before DECIMAL(5,2) NULL,
+    seo_after DECIMAL(5,2) NULL,
+    seo_improvement DECIMAL(5,2) NULL,
+    words_before INT DEFAULT 0,
+    words_after INT DEFAULT 0,
+    words_delta INT DEFAULT 0,
+    words_added INT DEFAULT 0,
+    activity_minutes DECIMAL(10,2) DEFAULT 0,
+    FOREIGN KEY (history_id) REFERENCES {$prefix}product_content_history(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE,
+    FOREIGN KEY (assigned_user_id) REFERENCES {$prefix}users(id) ON DELETE SET NULL,
+    KEY idx_user_date (user_id, edited_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}user_kpi_daily (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    date DATE,
+    user_id INT,
+    total_edits INT DEFAULT 0,
+    assigned_edits INT DEFAULT 0,
+    seo_before_sum DECIMAL(10,2) DEFAULT 0,
+    seo_after_sum DECIMAL(10,2) DEFAULT 0,
+    improvement_sum DECIMAL(10,2) DEFAULT 0,
+    activity_minutes DECIMAL(10,2) DEFAULT 0,
+    words_added_sum INT DEFAULT 0,
+    words_total_sum INT DEFAULT 0,
+    UNIQUE KEY uniq_date_user (date,user_id),
+    FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+}
+
+function estimate_word_count($html){
+  $text = trim(strip_tags($html));
+  if($text === '') return 0;
+  $parts = preg_split('/\s+/u',$text,-1,PREG_SPLIT_NO_EMPTY);
+  return $parts ? count($parts) : 0;
+}
+
+function estimate_activity_minutes($wordsBefore,$wordsAfter){
+  $wordsBefore = max(0,intval($wordsBefore));
+  $wordsAfter = max(0,intval($wordsAfter));
+  $delta = abs($wordsAfter - $wordsBefore);
+  $base = max($wordsAfter,$delta);
+  if($base <= 0){ return 0.25; }
+  return round(max($base/120,0.25),2);
 }
 
 function seed_content_history_if_empty($db,$prefix){
@@ -1675,7 +2003,7 @@ function google_index_url($url){
   }
   if(!$token){
     $db = connect_local();
-    if($db){
+  if($db){
       $prefix = $_SESSION['logdb']['prefix'];
       $cid = get_setting($db,$prefix,'sc_client_id');
       $secret = get_setting($db,$prefix,'sc_client_secret');
@@ -1730,7 +2058,7 @@ function log_event($action){
   if($key){
     $url = "https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$ip}";
     $resp = @file_get_contents($url);
-    if($resp){
+  if($resp){
       $data = json_decode($resp,true);
       if($data){
         $geo['country'] = $data['location']['country'] ?? '';
