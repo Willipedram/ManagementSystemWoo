@@ -42,7 +42,12 @@ case 'login':
   if($db->connect_errno){ echo json_encode(array('success'=>false,'message'=>$db->connect_error)); break; }
   $db->set_charset('utf8mb4');
   init_local_tables($db,$cfg['prefix']);
-  $stmt = $db->prepare("SELECT u.id,u.username,u.full_name,u.password_hash,r.permissions FROM {$cfg['prefix']}users u JOIN {$cfg['prefix']}roles r ON u.role_id=r.id WHERE u.username=? AND u.status='active'");
+  $stmt = $db->prepare(
+    "SELECT u.id,u.username,u.full_name,u.password_hash,u.role_id,COALESCE(r.permissions,'') AS permissions
+     FROM {$cfg['prefix']}users u
+     LEFT JOIN {$cfg['prefix']}roles r ON u.role_id=r.id
+     WHERE u.username=? AND u.status='active'"
+  );
   $stmt->bind_param('s',$username);
   $stmt->execute();
   $res = $stmt->get_result();
@@ -53,7 +58,13 @@ case 'login':
     $_SESSION['user_id'] = intval($row['id']);
     $_SESSION['username'] = $row['username'];
     $_SESSION['full_name'] = $row['full_name'] ?? '';
-    $_SESSION['permissions'] = $row['permissions'];
+    $perms = $row['permissions'];
+    if($perms === null){ $perms = ''; }
+    if($perms === '' && (empty($row['role_id']) || intval($row['role_id']) === 0)){
+      $perms = 'all';
+    }
+    $_SESSION['permissions'] = $perms;
+    $_SESSION['role_id'] = isset($row['role_id']) ? intval($row['role_id']) : null;
     $_SESSION['logdb'] = $cfg;
     $mainCfg = secure_load_config();
   if($mainCfg){ $_SESSION['db'] = $mainCfg; }
