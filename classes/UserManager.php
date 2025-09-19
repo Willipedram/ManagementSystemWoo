@@ -8,7 +8,7 @@ class UserManager {
     }
     public function all(){
         $rows = [];
-        $res = $this->db->query("SELECT u.id, u.username, r.name AS role, u.status, DATE_FORMAT(u.created_at,'%Y-%m-%d %H:%i') as created_at FROM {$this->prefix}users u LEFT JOIN {$this->prefix}roles r ON u.role_id=r.id ORDER BY u.id DESC");
+        $res = $this->db->query("SELECT u.id, u.username, u.full_name, r.name AS role, u.status, DATE_FORMAT(u.created_at,'%Y-%m-%d %H:%i') as created_at FROM {$this->prefix}users u LEFT JOIN {$this->prefix}roles r ON u.role_id=r.id ORDER BY u.id DESC");
         if($res){ while($r = $res->fetch_assoc()){ $rows[] = $r; } }
         return $rows;
     }
