@@ -121,3 +121,66 @@ CREATE TABLE IF NOT EXISTS msw_external_links (
   url TEXT,
   title VARCHAR(191)
 );
+
+CREATE TABLE IF NOT EXISTS msw_search_console_daily (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  date DATE,
+  site_url VARCHAR(191),
+  page VARCHAR(2083),
+  query VARCHAR(191),
+  device VARCHAR(20),
+  country VARCHAR(10),
+  clicks INT,
+  impressions INT,
+  ctr DECIMAL(5,2),
+  position DECIMAL(8,2),
+  search_appearance VARCHAR(50),
+  sessions INT NULL,
+  bounce_rate DECIMAL(5,2) NULL,
+  avg_session_duration INT NULL,
+  conversions INT NULL,
+  lcp DECIMAL(6,3) NULL,
+  cls DECIMAL(5,3) NULL,
+  fid DECIMAL(6,3) NULL,
+  ttfb DECIMAL(6,3) NULL,
+  referring_domains INT NULL,
+  anchors TEXT NULL,
+  trends_interest INT NULL,
+  UNIQUE KEY uniq (date,site_url(150),page(191),query(150),device,country,search_appearance(30))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS msw_user_kpi_events (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  history_id BIGINT UNIQUE,
+  user_id INT,
+  product_id BIGINT,
+  assigned_user_id INT NULL,
+  edited_at DATETIME,
+  seo_before DECIMAL(5,2) NULL,
+  seo_after DECIMAL(5,2) NULL,
+  seo_improvement DECIMAL(5,2) NULL,
+  words_before INT DEFAULT 0,
+  words_after INT DEFAULT 0,
+  words_delta INT DEFAULT 0,
+  words_added INT DEFAULT 0,
+  activity_minutes DECIMAL(10,2) DEFAULT 0,
+  KEY idx_user_date (user_id, edited_at),
+  KEY idx_user_kpi_events_user (user_id),
+  KEY idx_user_kpi_events_assigned (assigned_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS msw_user_kpi_daily (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  date DATE,
+  user_id INT,
+  total_edits INT DEFAULT 0,
+  assigned_edits INT DEFAULT 0,
+  seo_before_sum DECIMAL(10,2) DEFAULT 0,
+  seo_after_sum DECIMAL(10,2) DEFAULT 0,
+  improvement_sum DECIMAL(10,2) DEFAULT 0,
+  activity_minutes DECIMAL(10,2) DEFAULT 0,
+  words_added_sum INT DEFAULT 0,
+  words_total_sum INT DEFAULT 0,
+  UNIQUE KEY uniq_date_user (date,user_id),
+  KEY idx_user_kpi_daily_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
