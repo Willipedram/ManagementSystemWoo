@@ -10,6 +10,7 @@ $canEditSlug = in_array('all',$permissions) || in_array('edit_slug',$permissions
 $canViewLogs = in_array('all',$permissions) || in_array('view_logs',$permissions);
 $canViewUsers = in_array('all',$permissions) || in_array('view_users',$permissions);
 $canViewAssignments = in_array('all',$permissions) || in_array('view_assignments',$permissions);
+$canViewKpis = in_array('all',$permissions) || in_array('view_kpis',$permissions);
 ?>
 <!doctype html>
 <html lang="fa" dir="rtl">
@@ -67,6 +68,7 @@ footer{font-size:.9rem; margin-top:auto;}
 #priceEdit{padding-bottom:3rem;}
 #priceTable{direction:rtl;}
 #priceSearch{width:100%;padding:.75rem 1rem;font-size:1.1rem;box-shadow:0 0 6px rgba(0,0,0,.15);border:1px solid #ced4da;border-radius:.25rem;margin-bottom:1rem;}
+#wizard-debug-panel pre{direction:ltr;text-align:left;white-space:pre-wrap;max-height:220px;overflow:auto;background:#f8f9fa;border-radius:.5rem;padding:1rem;}
 </style>
 </head>
 <body>
@@ -77,6 +79,25 @@ footer{font-size:.9rem; margin-top:auto;}
   <div class="card">
     <div class="card-header text-center">راه‌اندازی سامانه</div>
     <div class="card-body">
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="wizard-debug-toggle">
+        <label class="form-check-label" for="wizard-debug-toggle">فعال‌سازی گزارش اشکال‌زدایی نصب</label>
+        <div class="form-text">در صورت بروز خطا، این گزینه را فعال کنید تا شناسه و جزییات فرایند برای پشتیبانی ذخیره شود.</div>
+      </div>
+      <div id="wizard-debug-panel" class="card border-0 shadow-sm mb-3 d-none">
+        <div class="card-body p-3">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <div>
+              <div class="fw-bold small">گزارش نصب</div>
+              <div class="text-muted small">شناسه: <span id="wizard-debug-id">-</span></div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="wizard-debug-copy" disabled>
+              <i class="fa-regular fa-copy ms-1"></i>کپی لاگ
+            </button>
+          </div>
+          <pre id="wizard-debug-log" class="small mb-0">پس از اجرای هر مرحله، لاگ اشکال‌زدایی اینجا نمایش داده می‌شود.</pre>
+        </div>
+      </div>
       <div id="step1">
         <h5 class="mb-3">اتصال به پایگاه ووکامرس</h5>
         <div class="mb-3"><label class="form-label">نام میزبان</label><input type="text" id="db_host" class="form-control" autocomplete="off"></div>
@@ -115,46 +136,178 @@ footer{font-size:.9rem; margin-top:auto;}
 </div>
 <script>
 $(function(){
+  let wizardDebugData = null;
+
+  function wizardRequest(action,data,callback){
+    data = data || {};
+    data.action = action;
+    if($('#wizard-debug-toggle').is(':checked')){
+      data.msw_debug = 1;
+    }
+    NProgress.start();
+    $.ajax({
+      url:'ajax.php',
+      method:'POST',
+      data:data,
+      dataType:'json'
+    }).done(function(res){
+      updateWizardDebug(res);
+      if(typeof callback === 'function'){
+        callback(res);
+      }
+    }).fail(function(xhr){
+      const response = xhr.responseJSON || null;
+      updateWizardDebug(response);
+      let message = response && response.message ? response.message : (xhr.responseText ? xhr.responseText : 'خطای ناشناخته در ارتباط با سرور');
+      Swal.fire('خطا',message,'error');
+    }).always(function(){
+      NProgress.done();
+    });
+  }
+
+  function updateWizardDebug(res){
+    const panel = $('#wizard-debug-panel');
+    if(!$('#wizard-debug-toggle').is(':checked')){
+      panel.addClass('d-none');
+      wizardDebugData = null;
+      $('#wizard-debug-copy').prop('disabled',true);
+      return;
+    }
+    panel.removeClass('d-none');
+    const idEl = $('#wizard-debug-id');
+    const logEl = $('#wizard-debug-log');
+    if(res && res.debug_steps){
+      wizardDebugData = {
+        debug_id:res.debug_id,
+        debug_steps:res.debug_steps,
+        success:Object.prototype.hasOwnProperty.call(res,'success') ? res.success : null,
+        message:res.message !== undefined ? res.message : null
+      };
+      idEl.text(res.debug_id || '-');
+      const formatted = res.debug_steps.map(function(step){
+        const ctx = step.context && Object.keys(step.context).length ? ' | '+JSON.stringify(step.context) : '';
+        return step.ts+' • '+step.stage+ctx;
+      }).join('\n');
+      logEl.text(formatted);
+      $('#wizard-debug-copy').prop('disabled',false);
+    } else if(res && res.debug_id){
+      wizardDebugData = {
+        debug_id:res.debug_id,
+        debug_steps:[],
+        success:Object.prototype.hasOwnProperty.call(res,'success') ? res.success : null,
+        message:res.message !== undefined ? res.message : null
+      };
+      idEl.text(res.debug_id);
+      logEl.text('هیچ مرحله‌ای ثبت نشد.');
+      $('#wizard-debug-copy').prop('disabled',false);
+    } else {
+      wizardDebugData = res ? {
+        debug_id:res.debug_id !== undefined ? res.debug_id : null,
+        debug_steps:[],
+        success:Object.prototype.hasOwnProperty.call(res,'success') ? res.success : null,
+        message:res.message !== undefined ? res.message : null
+      } : null;
+      idEl.text(res && res.debug_id ? res.debug_id : '-');
+      if(res && res.message){
+        logEl.text('پیام سرور: '+res.message);
+      } else {
+        logEl.text('پس از اجرای هر مرحله، لاگ اشکال‌زدایی اینجا نمایش داده می‌شود.');
+      }
+      $('#wizard-debug-copy').prop('disabled',true);
+    }
+  }
+
+  $('#wizard-debug-toggle').on('change',function(){
+    updateWizardDebug(null);
+  });
+
+  $('#wizard-debug-copy').on('click',function(){
+    if(!wizardDebugData){
+      toastr.warning('لاگی برای کپی وجود ندارد');
+      return;
+    }
+    const payload = JSON.stringify(wizardDebugData,null,2);
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(payload).then(function(){
+        toastr.success('لاگ در کلیپ‌بورد کپی شد');
+      }).catch(function(){
+        toastr.error('امکان کپی خودکار وجود ندارد');
+      });
+    } else {
+      const $temp = $('<textarea class="visually-hidden"></textarea>').val(payload).appendTo('body');
+      $temp[0].focus();
+      $temp[0].select();
+      try{
+        const success = document.execCommand && document.execCommand('copy');
+        if(success){
+          toastr.success('لاگ در کلیپ‌بورد کپی شد');
+        } else {
+          toastr.error('امکان کپی خودکار وجود ندارد');
+        }
+      }catch(e){
+        toastr.error('امکان کپی خودکار وجود ندارد');
+      }
+      $temp.remove();
+    }
+  });
+
   $('#setup-next1').click(function(){
-    $.post('ajax.php',{action:'db_connect',host:$('#db_host').val(),name:$('#db_name').val(),user:$('#db_user').val(),pass:$('#db_pass').val(),prefix:$('#db_prefix').val()},function(r){
-      if(r.success){
+    wizardRequest('db_connect',{
+      host:$('#db_host').val(),
+      name:$('#db_name').val(),
+      user:$('#db_user').val(),
+      pass:$('#db_pass').val(),
+      prefix:$('#db_prefix').val()
+    },function(r){
+      if(r && r.success){
         toastr.success('اتصال پایگاه ووکامرس برقرار شد');
         $('#step1').addClass('d-none');
         $('#step2').removeClass('d-none');
+      } else if(r){
+        Swal.fire('خطا',r.message || 'خطای ناشناخته','error');
       }
-      else{
-        Swal.fire('خطا',r.message,'error');
-      }
-    },'json');
+    });
   });
+
   $('#setup-back2').click(function(){
     $('#step2').addClass('d-none');
     $('#step1').removeClass('d-none');
   });
+
   $('#setup-next2').click(function(){
-    $.post('ajax.php',{action:'local_db_connect',host:$('#local_host').val(),name:$('#local_name').val(),user:$('#local_user').val(),pass:$('#local_pass').val(),prefix:$('#local_prefix').val()},function(r){
-      if(r.success){
+    wizardRequest('local_db_connect',{
+      host:$('#local_host').val(),
+      name:$('#local_name').val(),
+      user:$('#local_user').val(),
+      pass:$('#local_pass').val(),
+      prefix:$('#local_prefix').val()
+    },function(r){
+      if(r && r.success){
         toastr.success('اتصال پایگاه داده سامانه برقرار شد');
         $('#step2').addClass('d-none');
         $('#step3').removeClass('d-none');
+      } else if(r){
+        Swal.fire('خطا',r.message || 'خطای ناشناخته','error');
       }
-      else{
-        Swal.fire('خطا',r.message,'error');
-      }
-    },'json');
+    });
   });
+
   $('#setup-back3').click(function(){
     $('#step3').addClass('d-none');
     $('#step2').removeClass('d-none');
   });
+
   $('#setup-finish').click(function(){
-    $.post('ajax.php',{action:'admin_init',username:$('#admin_username').val(),password:$('#admin_password').val()},function(r){
-      if(r.success){
+    wizardRequest('admin_init',{
+      username:$('#admin_username').val(),
+      password:$('#admin_password').val()
+    },function(r){
+      if(r && r.success){
         Swal.fire('موفق','مدیر ایجاد شد، لطفاً وارد شوید','success').then(()=>{window.location='index.php';});
-      }else{
-        Swal.fire('خطا',r.message,'error');
+      } else if(r){
+        Swal.fire('خطا',r.message || 'خطای ناشناخته','error');
       }
-    },'json');
+    });
   });
 });
 </script>
@@ -348,6 +501,11 @@ $('#local-connect-btn').click(function(){
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#analytics" type="button">گزارش‌ها</button>
   </li>
+  <?php if($canViewKpis): ?>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#userKpi" type="button">KPI کاربران</button>
+  </li>
+  <?php endif; ?>
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#bulk" type="button">اقدامات دست‌جمعی</button>
   </li>
@@ -466,6 +624,91 @@ $('#local-connect-btn').click(function(){
    </div>
   </section>
 </div>
+<?php if($canViewKpis): ?>
+<div class="tab-pane fade p-3" id="userKpi">
+  <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+    <div class="btn-group" id="kpiRange" role="group">
+      <button type="button" class="btn btn-outline-primary active" data-range="day">امروز</button>
+      <button type="button" class="btn btn-outline-primary" data-range="week">۷ روز اخیر</button>
+      <button type="button" class="btn btn-outline-primary" data-range="month">۳۰ روز اخیر</button>
+    </div>
+    <small class="text-muted" id="kpiUpdatedAt"></small>
+  </div>
+  <div class="row g-3 mb-4">
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <p class="text-muted mb-1" id="kpiTotalLabel">مجموع ویرایش‌های امروز</p>
+          <h3 class="fw-bold mb-0" id="kpiTotalEdits">۰</h3>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <p class="text-muted mb-1" id="kpiBestLabel">بهترین کاربر امروز</p>
+          <h4 class="fw-bold mb-0" id="kpiBestUser">-</h4>
+          <small class="text-muted" id="kpiBestDetails"></small>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <p class="text-muted mb-1" id="kpiAvgLabel">میانگین بهبود کل</p>
+          <h3 class="fw-bold mb-0" id="kpiAvgImprovement">۰</h3>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="row g-4 mb-4">
+    <div class="col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>حجم ویرایش کاربران</span>
+          <span class="badge bg-primary" id="kpiBarTotal">۰</span>
+        </div>
+        <div class="card-body">
+          <canvas id="kpiBarChart" style="max-height:320px"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header">سهم کاربران از ویرایش‌ها</div>
+        <div class="card-body">
+          <canvas id="kpiPieChart" style="max-height:320px"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card shadow-sm mb-4">
+    <div class="card-header">روند میانگین نمره سئو</div>
+    <div class="card-body">
+      <canvas id="kpiLineChart" style="max-height:320px"></canvas>
+    </div>
+  </div>
+  <div class="card shadow-sm">
+    <div class="card-header">رتبه‌بندی کاربران</div>
+    <div class="card-body table-responsive">
+      <table class="table table-striped align-middle" id="kpiLeaderboardTable">
+        <thead>
+          <tr>
+            <th>کاربر</th>
+            <th>تعداد ویرایش</th>
+            <th>ویرایش‌های تخصیص‌شده</th>
+            <th>میانگین قبل</th>
+            <th>میانگین بعد</th>
+            <th>میانگین بهبود</th>
+            <th>دقایق فعالیت</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
   <div class="tab-pane fade p-3" id="bulk">
   <div class="card mb-3">
     <div class="card-header">مدیریت موجودی</div>
@@ -1028,6 +1271,10 @@ $('#local-connect-btn').click(function(){
           <input class="form-check-input rperm" type="checkbox" value="view_assignments" id="rperm_assign">
           <label class="form-check-label" for="rperm_assign">مشاهده تب تخصیص محصولات</label>
         </div>
+        <div class="form-check">
+          <input class="form-check-input rperm" type="checkbox" value="view_kpis" id="rperm_kpis">
+          <label class="form-check-label" for="rperm_kpis">مشاهده تب KPI کاربران</label>
+        </div>
       </div>
       <button type="submit" class="btn btn-primary">ذخیره نقش</button>
     </form>
@@ -1220,13 +1467,19 @@ $('#local-connect-btn').click(function(){
        </div>
        <div class="mb-3">
        <label class="form-label">نامک محصول</label>
-        <div class="input-group">
+       <div class="input-group">
            <input type="text" id="prod_slug" class="form-control" <?php if(!$canEditSlug) echo 'disabled';?>>
            <?php if($canEditSlug): ?>
            <button class="btn btn-outline-secondary" type="button" id="editSlug">ویرایش</button>
            <button class="btn btn-outline-secondary" type="button" id="genSlug">ایجاد نامک انگلیسی</button>
            <?php endif; ?>
          </div>
+          <div class="text-end mt-2">
+            <button type="button" class="btn btn-outline-primary btn-sm d-inline-flex align-items-center justify-content-center gap-2" id="quickCopyPrompt">
+              <i class="fa-solid fa-robot"></i>
+              <span>کپی پرامپت هوش مصنوعی</span>
+            </button>
+          </div>
        </div>
        <div class="mb-3">
          <label class="form-label">توضیحات</label>
@@ -1346,9 +1599,21 @@ $('#prod_price').on('input',function(){
   let v=$(this).val().replace(/[^0-9]/g,'');
   if(v) $(this).val(v.replace(/\B(?=(\d{3})+(?!\d))/g,','));
 });
-$('#copyPrompt').click(function(){
-  navigator.clipboard.writeText($('#seo_prompt').val());
-  toastr.info('کپی شد');
+function copySeoPrompt(){
+  const promptText=$('#seo_prompt').val();
+  if(!promptText){
+    toastr.warning('پرامپتی برای کپی موجود نیست');
+    return;
+  }
+  navigator.clipboard.writeText(promptText).then(()=>{
+    toastr.info('پرامپت هوش مصنوعی کپی شد');
+  }).catch(()=>{
+    toastr.error('امکان کپی پرامپت فراهم نشد');
+  });
+}
+
+$('#copyPrompt, #quickCopyPrompt').on('click',function(){
+  copySeoPrompt();
 });
 $('#editSlug').click(function(){ $('#prod_slug').prop('disabled',false).focus(); });
 $('#genSlug').click(function(){
@@ -2469,6 +2734,7 @@ $('#saveBtn').click(function(){
             $('#prod_slug').data('old',$('#prod_slug').val());
           }
           loadProducts();
+          if($('#userKpi').length && userKpiInitialized){ loadUserKpi(); }
           bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
         }else{
           toastr.error(res.message);
@@ -2737,13 +3003,138 @@ function loadAnalytics(){
     log('analytics loaded: '+JSON.stringify(res));
   }else{
 log('analytics error: '+res.message);
-  }
+ }
 },'json').fail(function(xhr){ log('analytics ajax error '+xhr.status+' '+xhr.responseText); });
 }
 let analyticsLoaded=false;
+const kpiColors=['#0d6efd','#6610f2','#6f42c1','#d63384','#fd7e14','#198754','#20c997','#0dcaf0','#6c757d','#343a40'];
+let userKpiCharts={bar:null,pie:null,line:null};
+let userKpiInitialized=false;
+let currentKpiRange='day';
+
+function formatPersianNumber(value,decimals){
+  const num=Number(value);
+  if(isNaN(num)){ return toPersianDigits('0'); }
+  const opts=decimals!==undefined?{minimumFractionDigits:decimals,maximumFractionDigits:decimals}:{};
+  return toPersianDigits(num.toLocaleString('fa-IR',opts));
+}
+
+function setupUserKpi(){
+  if(userKpiInitialized) return;
+  $('#kpiRange button').on('click',function(){
+    if($(this).hasClass('active')) return;
+    $('#kpiRange button').removeClass('active');
+    $(this).addClass('active');
+    currentKpiRange=$(this).data('range');
+    loadUserKpi();
+  });
+  loadUserKpi();
+  userKpiInitialized=true;
+}
+
+function loadUserKpi(){
+  if(!$('#userKpi').length) return;
+  const range=currentKpiRange;
+  NProgress.start();
+  $.post('ajax.php',{action:'user_kpi_summary',range:range},function(res){
+    NProgress.done();
+    if(res.success){
+      updateUserKpiUi(res);
+    }else{
+      toastr.error(res.message||'خطا در بارگذاری KPI کاربران');
+    }
+  },'json').fail(function(){
+    NProgress.done();
+    toastr.error('خطا در ارتباط با سرور');
+  });
+}
+
+function updateUserKpiUi(data){
+  currentKpiRange=data.range||currentKpiRange;
+  $('#kpiRange button').removeClass('active');
+  $('#kpiRange button[data-range="'+currentKpiRange+'"]').addClass('active');
+  $('#kpiTotalLabel').text(data.cards.total_label);
+  $('#kpiTotalEdits').text(formatPersianNumber(data.cards.total_edits||0));
+  $('#kpiBestLabel').text(data.cards.best_label);
+  $('#kpiBestUser').text(data.cards.best_user && data.cards.best_user.name ? data.cards.best_user.name : '-');
+  const bestEdits=data.cards.best_user && data.cards.best_user.edits ? formatPersianNumber(data.cards.best_user.edits||0) : '۰';
+  const bestImp=data.cards.best_user && data.cards.best_user.improvement ? formatPersianNumber(data.cards.best_user.improvement||0,2) : '۰';
+  $('#kpiBestDetails').text(`ویرایش‌ها: ${bestEdits} | بهبود: ${bestImp}`);
+  $('#kpiAvgLabel').text(data.cards.avg_improvement_label);
+  $('#kpiAvgImprovement').text(formatPersianNumber(data.cards.avg_improvement||0,2));
+  $('#kpiBarTotal').text(formatPersianNumber(data.total_edits||0));
+  if(data.updated_at){
+    $('#kpiUpdatedAt').text('آخرین بروزرسانی: '+toJalali(data.updated_at));
+  }else{
+    $('#kpiUpdatedAt').text('');
+  }
+
+  const barCtx=document.getElementById('kpiBarChart').getContext('2d');
+  const pieCtx=document.getElementById('kpiPieChart').getContext('2d');
+  const lineCtx=document.getElementById('kpiLineChart').getContext('2d');
+  const rawLineLabels = Array.isArray(data.line.labels) ? data.line.labels : [];
+  const lineLabels = rawLineLabels.map(lbl=>lbl ? toJalaliDate(lbl) : '');
+
+  if(!userKpiCharts.bar){
+    userKpiCharts.bar=new Chart(barCtx,{type:'bar',data:{labels:data.bar.labels,datasets:[{label:'ویرایش',data:data.bar.data,backgroundColor:'#0d6efd'}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}});
+  }else{
+    userKpiCharts.bar.data.labels=data.bar.labels;
+    userKpiCharts.bar.data.datasets[0].data=data.bar.data;
+    userKpiCharts.bar.update();
+  }
+
+  const pieColors=data.pie.labels.map((_,idx)=>kpiColors[idx%kpiColors.length]);
+  if(!userKpiCharts.pie){
+    userKpiCharts.pie=new Chart(pieCtx,{type:'pie',data:{labels:data.pie.labels,datasets:[{data:data.pie.data,backgroundColor:pieColors}]},options:{responsive:true,maintainAspectRatio:false}});
+  }else{
+    userKpiCharts.pie.data.labels=data.pie.labels;
+    userKpiCharts.pie.data.datasets[0].data=data.pie.data;
+    userKpiCharts.pie.data.datasets[0].backgroundColor=pieColors;
+    userKpiCharts.pie.update();
+  }
+
+  const lineDatasets=data.line.datasets.map((ds,idx)=>({
+    label:ds.label,
+    data:ds.data,
+    borderColor:kpiColors[idx%kpiColors.length],
+    backgroundColor:kpiColors[idx%kpiColors.length],
+    tension:0.2,
+    fill:false,
+    spanGaps:true
+  }));
+  if(!userKpiCharts.line){
+    userKpiCharts.line=new Chart(lineCtx,{type:'line',data:{labels:lineLabels,datasets:lineDatasets},options:{responsive:true,maintainAspectRatio:false}});
+  }else{
+    userKpiCharts.line.data.labels=lineLabels;
+    userKpiCharts.line.data.datasets=lineDatasets;
+    userKpiCharts.line.update();
+  }
+
+  const tbody=$('#kpiLeaderboardTable tbody');
+  tbody.empty();
+  if(!data.leaderboard || data.leaderboard.length===0){
+    tbody.append('<tr><td colspan="7" class="text-center text-muted">داده‌ای ثبت نشده است</td></tr>');
+  }else{
+    data.leaderboard.forEach(item=>{
+      tbody.append(`<tr>
+        <td>${item.label}</td>
+        <td>${formatPersianNumber(item.total_edits||0)}</td>
+        <td>${formatPersianNumber(item.assigned_edits||0)}</td>
+        <td>${formatPersianNumber(item.avg_before||0,2)}</td>
+        <td>${formatPersianNumber(item.avg_after||0,2)}</td>
+        <td>${formatPersianNumber(item.improvement_avg||0,2)}</td>
+        <td>${formatPersianNumber(item.activity_minutes||0,2)}</td>
+      </tr>`);
+    });
+  }
+}
 $('button[data-bs-target="#analytics"]').on('shown.bs.tab',function(){
  if(!analyticsLoaded){ loadAnalytics(); analyticsLoaded=true; }
 });
+if($('#userKpi').length){
+  $('button[data-bs-target="#userKpi"]').on('shown.bs.tab',function(){ setupUserKpi(); });
+  if($('#userKpi').hasClass('active')){ setupUserKpi(); }
+}
 
 
 
