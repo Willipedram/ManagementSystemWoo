@@ -18,8 +18,257 @@ function has_perm($p){
 }
 
 function compute_seo_score($t,$d,$c,$f){
-  $a = SEOAnalyzer::analyze($t,$d,$c,$f);
+  $baseUrl = $_SESSION['site_base_url'] ?? '';
+  $a = SEOAnalyzer::analyze($t,$d,$c,$f,$baseUrl);
   return $a['score'] ?? 0;
+}
+
+function msw_debug_enabled(){
+  static $enabled = null;
+  if($enabled !== null){
+    return $enabled;
+  }
+  $enabled = false;
+  $flag = $_POST['msw_debug'] ?? ($_POST['debug'] ?? null);
+  if($flag !== null){
+    $normalized = strtolower((string)$flag);
+    if(in_array($normalized,array('1','true','on','yes'),true)){
+      $enabled = true;
+      $_SESSION['msw_debug'] = true;
+    } elseif(in_array($normalized,array('0','false','off','no'),true)){
+      $_SESSION['msw_debug'] = false;
+    }
+  }
+  if(!$enabled && isset($_SESSION['msw_debug']) && $_SESSION['msw_debug']){
+    $enabled = true;
+  }
+  if(!$enabled && file_exists(__DIR__.'/debug.flag')){
+    $enabled = true;
+  }
+  return $enabled;
+}
+
+function msw_debug_write_log(array $entry){
+  if(!msw_debug_enabled()){
+    return;
+  }
+  $entry['ts'] = $entry['ts'] ?? date('c');
+  $json = json_encode($entry, JSON_UNESCAPED_UNICODE);
+  if($json !== false){
+    $path = __DIR__.'/msw_debug.log';
+    file_put_contents($path, $json.PHP_EOL, FILE_APPEND);
+  }
+}
+
+function msw_clean_error_text($message){
+  $text = trim((string)$message);
+  if($text === ''){
+    return 'خطای ناشناخته رخ داد';
+  }
+  $text = preg_replace('/\s+/u',' ',$text);
+  return $text;
+}
+
+function msw_emit_runtime_error($message,array $context=array()){
+  static $emitted = false;
+  if($emitted){
+    return;
+  }
+  $emitted = true;
+  $clean = msw_clean_error_text($message);
+  if(isset($context['file'])){
+    $clean .= ' ('.$context['file'];
+    if(isset($context['line'])){
+      $clean .= ':'.$context['line'];
+    }
+    $clean .= ')';
+  }
+  if(!headers_sent()){
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+  }
+  $payload = array('success'=>false,'message'=>$clean);
+  if(msw_debug_enabled()){
+    $payload['debug_context'] = $context;
+  }
+  echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+function msw_register_global_handlers(){
+  static $registered = false;
+  if($registered){
+    return;
+  }
+  $registered = true;
+  set_exception_handler(function($ex){
+    $context = array(
+      'type'=>'exception',
+      'exception'=>get_class($ex),
+      'message'=>$ex->getMessage(),
+      'file'=>$ex->getFile(),
+      'line'=>$ex->getLine()
+    );
+    msw_debug_write_log(array('stage'=>'unhandled_exception','context'=>$context));
+    msw_emit_runtime_error($ex->getMessage(),$context);
+  });
+  register_shutdown_function(function(){
+    $error = error_get_last();
+    if(!$error){
+      return;
+    }
+    $fatalTypes = array(E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR,E_USER_ERROR);
+    if(!in_array($error['type'],$fatalTypes,true)){
+      return;
+    }
+    $context = array(
+      'type'=>'fatal',
+      'message'=>$error['message'],
+      'file'=>$error['file'],
+      'line'=>$error['line']
+    );
+    msw_debug_write_log(array('stage'=>'fatal_error','context'=>$context));
+    msw_emit_runtime_error($error['message'],$context);
+  });
+}
+
+class MswDebugCollector{
+  private $id = null;
+  private $steps = array();
+
+  public function __construct($channel){
+    if(!msw_debug_enabled()){
+      return;
+    }
+    try{
+      $token = bin2hex(random_bytes(3));
+    }catch(Exception $e){
+      $token = uniqid();
+    }
+    $this->id = $channel.'-'.date('YmdHis').'-'.$token;
+    $this->checkpoint('start',array('channel'=>$channel));
+  }
+
+  public function checkpoint($stage,array $context=array()){
+    if(!$this->id){
+      return;
+    }
+    $entry = array(
+      'ts'=>date('c'),
+      'stage'=>$stage,
+      'context'=>$context
+    );
+    $this->steps[] = $entry;
+    msw_debug_write_log(array_merge(array('id'=>$this->id),$entry));
+  }
+
+  public function finalize(array $response){
+    if(!$this->id){
+      return $response;
+    }
+    $response['debug_id'] = $this->id;
+    $response['debug_steps'] = $this->steps;
+    return $response;
+  }
+}
+
+msw_register_global_handlers();
+
+function handle_login(){
+  $debug = new MswDebugCollector('login');
+  $username = trim($_POST['username'] ?? '');
+  $password = $_POST['password'] ?? '';
+  $debug->checkpoint('payload_received',array(
+    'username'=>$username,
+    'password_length'=>strlen($password)
+  ));
+  $cfg = secure_load_local_config();
+  if(!$cfg){
+    $debug->checkpoint('local_config_missing');
+    return $debug->finalize(array('success'=>false,'message'=>'تنظیمات پایگاه داده سامانه موجود نیست'));
+  }
+  $debug->checkpoint('local_config_loaded',array(
+    'has_host'=>!empty($cfg['host'] ?? ''),
+    'has_user'=>!empty($cfg['user'] ?? ''),
+    'has_name'=>!empty($cfg['name'] ?? ''),
+    'prefix'=>$cfg['prefix'] ?? ''
+  ));
+  try{
+    $db = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']);
+  }catch(mysqli_sql_exception $e){
+    $debug->checkpoint('local_db_exception',array('error'=>$e->getMessage()));
+    return $debug->finalize(array('success'=>false,'message'=>'اتصال به پایگاه داده سامانه ناموفق بود'));
+  }
+  if($db->connect_errno){
+    $debug->checkpoint('local_db_connect_error',array('errno'=>$db->connect_errno,'error'=>$db->connect_error));
+    $msg = $db->connect_error ?: 'خطای اتصال پایگاه داده';
+    $db->close();
+    return $debug->finalize(array('success'=>false,'message'=>$msg));
+  }
+  $db->set_charset('utf8mb4');
+  $debug->checkpoint('local_db_connected');
+  $schemaErrors = init_local_tables($db,$cfg['prefix'],$debug);
+  if(!empty($schemaErrors)){
+    $debug->checkpoint('schema_setup_failed',array('count'=>count($schemaErrors),'errors'=>$schemaErrors));
+    $db->close();
+    $message = 'راه‌اندازی جداول سامانه با خطا مواجه شد';
+    $details = format_schema_error_message($schemaErrors);
+    if($details !== ''){
+      $message .= ': '.$details;
+    }
+    return $debug->finalize(array('success'=>false,'message'=>$message));
+  }
+  $debug->checkpoint('schema_ready');
+  $sql = "SELECT u.id,u.username,u.full_name,u.password_hash,u.role_id,COALESCE(r.permissions,'') AS permissions
+     FROM {$cfg['prefix']}users u
+     LEFT JOIN {$cfg['prefix']}roles r ON u.role_id=r.id
+     WHERE u.username=? AND u.status='active'";
+  $stmt = $db->prepare($sql);
+  if(!$stmt){
+    $debug->checkpoint('user_query_prepare_failed',array('error'=>$db->error));
+    $db->close();
+    return $debug->finalize(array('success'=>false,'message'=>'خطای داخلی سرور'));
+  }
+  $stmt->bind_param('s',$username);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $row = $res ? $res->fetch_assoc() : null;
+  $stmt->close();
+  $debug->checkpoint('user_lookup_complete',array('found'=> (bool)$row));
+  if($row && password_verify($password,$row['password_hash'])){
+    $debug->checkpoint('password_verified',array('user_id'=>intval($row['id'])));
+    $_SESSION['auth'] = true;
+    $_SESSION['user_id'] = intval($row['id']);
+    $_SESSION['username'] = $row['username'];
+    $_SESSION['full_name'] = $row['full_name'] ?? '';
+    $perms = $row['permissions'];
+    if($perms === null){ $perms = ''; }
+    if($perms === '' && (empty($row['role_id']) || intval($row['role_id']) === 0)){
+      $perms = 'all';
+    }
+    $_SESSION['permissions'] = $perms;
+    $_SESSION['role_id'] = isset($row['role_id']) ? intval($row['role_id']) : null;
+    $_SESSION['logdb'] = $cfg;
+    $mainCfg = secure_load_config();
+    if($mainCfg){
+      $_SESSION['db'] = $mainCfg;
+      $debug->checkpoint('wp_config_loaded');
+    } else {
+      $debug->checkpoint('wp_config_missing');
+    }
+    try{
+      log_event('login');
+      $debug->checkpoint('login_event_logged');
+    }catch(Throwable $e){
+      $debug->checkpoint('login_event_failed',array('error'=>$e->getMessage()));
+    }
+    $db->close();
+    return $debug->finalize(array('success'=>true));
+  }
+  $reason = $row ? 'password_mismatch' : 'user_not_found';
+  $debug->checkpoint('login_failed',array('reason'=>$reason));
+  $db->close();
+  return $debug->finalize(array('success'=>false,'message'=>'ورود نامعتبر'));
 }
 
 $publicActions = array('login','db_connect','load_saved_config','local_db_connect',
@@ -32,36 +281,8 @@ if(!isset($_SESSION['auth']) && !in_array($action,$publicActions)){
 
 switch($action){
 case 'login':
-  $username = trim($_POST['username'] ?? '');
-  $password = $_POST['password'] ?? '';
-  $cfg = secure_load_local_config();
-  if(!$cfg){ echo json_encode(array('success'=>false,'message'=>'تنظیمات پایگاه داده سامانه موجود نیست')); break; }
-  try{ $db = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
-  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
-  if($db->connect_errno){ echo json_encode(array('success'=>false,'message'=>$db->connect_error)); break; }
-  $db->set_charset('utf8mb4');
-  init_local_tables($db,$cfg['prefix']);
-  $stmt = $db->prepare("SELECT u.id,u.username,u.full_name,u.password_hash,r.permissions FROM {$cfg['prefix']}users u JOIN {$cfg['prefix']}roles r ON u.role_id=r.id WHERE u.username=? AND u.status='active'");
-  $stmt->bind_param('s',$username);
-  $stmt->execute();
-  $res = $stmt->get_result();
-  $row = $res ? $res->fetch_assoc() : null;
-  $stmt->close();
-  if($row && password_verify($password,$row['password_hash'])){
-    $_SESSION['auth'] = true;
-    $_SESSION['user_id'] = intval($row['id']);
-    $_SESSION['username'] = $row['username'];
-    $_SESSION['full_name'] = $row['full_name'] ?? '';
-    $_SESSION['permissions'] = $row['permissions'];
-    $_SESSION['logdb'] = $cfg;
-    $mainCfg = secure_load_config();
-    if($mainCfg){ $_SESSION['db'] = $mainCfg; }
-    log_event('login');
-    echo json_encode(array('success'=>true));
-  } else {
-    echo json_encode(array('success'=>false,'message'=>'ورود نامعتبر'));
-  }
-  $db->close();
+  $response = handle_login();
+  echo json_encode($response);
   break;
 case 'logout':
   log_event('logout');
@@ -69,25 +290,38 @@ case 'logout':
   echo json_encode(array('success'=>true));
   break;
 case 'db_connect':
+  $debug = new MswDebugCollector('wizard_db_connect');
   $host = isset($_POST['host']) ? $_POST['host'] : '';
   $name = isset($_POST['name']) ? $_POST['name'] : '';
   $user = isset($_POST['user']) ? $_POST['user'] : '';
   $pass = isset($_POST['pass']) ? $_POST['pass'] : '';
   $prefix = isset($_POST['prefix']) ? $_POST['prefix'] : 'wp_';
+  $debug->checkpoint('payload_received',array(
+    'host'=>$host,
+    'name'=>$name,
+    'user'=>$user,
+    'has_password'=>$pass !== '',
+    'prefix'=>$prefix
+  ));
   try{
     $mysqli = new mysqli($host,$user,$pass,$name);
   }catch(mysqli_sql_exception $e){
-    echo json_encode(array('success'=>false,'message'=>$e->getMessage()));
+    $debug->checkpoint('connect_exception',array('error'=>$e->getMessage()));
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>$e->getMessage())));
     break;
   }
   if($mysqli->connect_errno){
-    echo json_encode(array('success'=>false,'message'=>$mysqli->connect_error));
+    $debug->checkpoint('connect_failed',array('code'=>$mysqli->connect_errno,'error'=>$mysqli->connect_error));
+    $resp = array('success'=>false,'message'=>$mysqli->connect_error);
+    $mysqli->close();
+    echo json_encode($debug->finalize($resp));
   } else {
+    $debug->checkpoint('connect_success');
     $mysqli->set_charset('utf8mb4');
     $_SESSION['db'] = array('host'=>$host,'name'=>$name,'user'=>$user,'pass'=>$pass,'prefix'=>$prefix);
     $mysqli->close();
     secure_save_config($_SESSION['db']);
-    echo json_encode(array('success'=>true));
+    echo json_encode($debug->finalize(array('success'=>true)));
   }
   break;
 case 'load_saved_config':
@@ -124,20 +358,52 @@ case 'save_licenses':
   else{ echo json_encode(array('success'=>false,'message'=>'ذخیره نشد')); }
   break;
 case 'local_db_connect':
+  $debug = new MswDebugCollector('wizard_local_db_connect');
   $host = isset($_POST['host']) ? $_POST['host'] : '';
   $name = isset($_POST['name']) ? $_POST['name'] : '';
   $user = isset($_POST['user']) ? $_POST['user'] : '';
   $pass = isset($_POST['pass']) ? $_POST['pass'] : '';
   $prefix = isset($_POST['prefix']) ? $_POST['prefix'] : 'msw_';
+  $debug->checkpoint('payload_received',array(
+    'host'=>$host,
+    'name'=>$name,
+    'user'=>$user,
+    'has_password'=>$pass !== '',
+    'prefix'=>$prefix
+  ));
   try{ $mysqli = new mysqli($host,$user,$pass,$name); }
-  catch(mysqli_sql_exception $e){ echo json_encode(array('success'=>false,'message'=>$e->getMessage())); break; }
-  if($mysqli->connect_errno){ echo json_encode(array('success'=>false,'message'=>$mysqli->connect_error)); break; }
+  catch(mysqli_sql_exception $e){
+    $debug->checkpoint('connect_exception',array('error'=>$e->getMessage()));
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>$e->getMessage())));
+    break;
+  }
+  if($mysqli->connect_errno){
+    $debug->checkpoint('connect_failed',array('code'=>$mysqli->connect_errno,'error'=>$mysqli->connect_error));
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>$mysqli->connect_error)));
+    break;
+  }
   $mysqli->set_charset('utf8mb4');
   $_SESSION['logdb']=array('host'=>$host,'name'=>$name,'user'=>$user,'pass'=>$pass,'prefix'=>$prefix);
   secure_save_local_config($_SESSION['logdb']);
-  init_local_tables($mysqli,$prefix);
+  $debug->checkpoint('connection_established');
+  $schemaErrors = init_local_tables($mysqli,$prefix,$debug);
+  if(!empty($schemaErrors)){
+    if(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'local_db_connect','stage'=>'schema_errors','errors'=>$schemaErrors));
+    }
+    $mysqli->close();
+    $message = 'ایجاد جداول سامانه با خطا مواجه شد';
+    $details = format_schema_error_message($schemaErrors);
+    if($details !== ''){
+      $message .= ': '.$details;
+    }
+    $debug->checkpoint('schema_failed',array('errors'=>$schemaErrors));
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>$message)));
+    break;
+  }
+  $debug->checkpoint('schema_ready');
   $mysqli->close();
-  echo json_encode(array('success'=>true));
+  echo json_encode($debug->finalize(array('success'=>true)));
   break;
 case 'local_load_config':
   $cfg = secure_load_local_config();
@@ -409,12 +675,26 @@ case 'admin_check':
   echo json_encode(array('success'=>true,'exists'=>$row['c']>0));
   break;
 case 'admin_init':
-  $db = connect_local();
-  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
-  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
+  $debug = new MswDebugCollector('wizard_admin_init');
   $username = trim($_POST['username'] ?? '');
   $password = $_POST['password'] ?? '';
-  if(!$username || !$password){ echo json_encode(array('success'=>false,'message'=>'نام کاربری و رمز عبور الزامی است')); $db->close(); break; }
+  $debug->checkpoint('payload_received',array(
+    'username'=>$username,
+    'password_length'=>strlen($password)
+  ));
+  if(!$username || !$password){
+    $debug->checkpoint('validation_failed');
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>'نام کاربری و رمز عبور الزامی است')));
+    break;
+  }
+  $db = connect_local();
+  if(!$db){
+    $debug->checkpoint('connect_failed');
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')));
+    break;
+  }
+  $debug->checkpoint('connect_success');
+  $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
   $data = array(
     'username'=>$username,
     'password'=>$password,
@@ -423,11 +703,19 @@ case 'admin_init':
     'role_id'=>1,
     'status'=>'active'
   );
-  $ok = $mgr->create($data);
-  $db->close();
-  session_unset();
-  session_destroy();
-  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  $errorMsg = null;
+  $ok = $mgr->create($data,$errorMsg);
+  if($ok){
+    $debug->checkpoint('admin_created',array('insert_id'=>$db->insert_id));
+    $db->close();
+    session_unset();
+    session_destroy();
+    echo json_encode($debug->finalize(array('success'=>true,'message'=>'مدیر ایجاد شد')));
+  } else {
+    $debug->checkpoint('create_failed',array('error'=>$errorMsg ?: $db->error));
+    $db->close();
+    echo json_encode($debug->finalize(array('success'=>false,'message'=>$errorMsg ?: 'خطا در ذخیره')));
+  }
   break;
 case 'users_list':
   if(!has_perm('view_users')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
@@ -464,8 +752,9 @@ case 'user_create':
     'role_id'=>intval($_POST['role_id'] ?? 0),
     'status'=>$_POST['status'] ?? 'active'
   );
-  $ok = $mgr->create($data);
-  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  $error = null;
+  $ok = $mgr->create($data,$error);
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':($error ?: 'خطا در ذخیره')));
   $db->close();
   break;
 case 'user_update':
@@ -484,8 +773,9 @@ case 'user_update':
     'role_id'=>intval($_POST['role_id'] ?? 0),
     'status'=>$_POST['status'] ?? 'active'
   );
-  $ok = $mgr->update($id,$data);
-  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'خطا در ذخیره'));
+  $error = null;
+  $ok = $mgr->update($id,$data,$error);
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':($error ?: 'خطا در ذخیره')));
   $db->close();
   break;
 case 'user_delete':
@@ -494,8 +784,9 @@ case 'user_delete':
   if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
   $mgr = new UserManager($db,$_SESSION['logdb']['prefix']);
   $id = intval($_POST['id'] ?? 0);
-  $ok = $mgr->delete($id);
-  echo json_encode(array('success'=>$ok,'message'=>$ok?'':'حذف نشد'));
+  $error = null;
+  $ok = $mgr->delete($id,$error);
+  echo json_encode(array('success'=>$ok,'message'=>$ok?'':($error ?: 'حذف نشد')));
   $db->close();
   break;
 case 'list_categories':
@@ -609,12 +900,12 @@ case 'assign_manual':
   $inserted=0; $conflicts=array();
   foreach($arr as $pid){
     $check = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$pid");
-    if($check && $check->num_rows){
+  if($check && $check->num_rows){
       $assigned = intval($check->fetch_assoc()['user_id']);
       if($assigned != $user){ $conflicts[]=$pid; continue; }
     }
     $stmt = $ldb->prepare("INSERT INTO {$lp}product_assignments (user_id,product_id) VALUES (?,?)");
-    if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
+  if($stmt){ $stmt->bind_param('ii',$user,$pid); if($stmt->execute()) $inserted++; $stmt->close(); }
   }
   $ldb->close();
   if($conflicts){ echo json_encode(array('success'=>false,'message'=>'برخی محصولات قبلاً اختصاص یافته‌اند')); }
@@ -678,7 +969,7 @@ case 'user_assignments':
   if($ids){
     $idlist = implode(',',$ids);
     $pres = $db->query("SELECT ID,post_title FROM {$wp}posts WHERE ID IN ($idlist)");
-    if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
+  if($pres){ while($p=$pres->fetch_assoc()){ $rows[] = array('id'=>$p['ID'],'title'=>$p['post_title']); } }
   }
   $db->close();
   $ldb->close();
@@ -780,28 +1071,30 @@ case 'list_products':
   $perm = $_SESSION['permissions'] ?? '';
   $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'";
   if($perm !== 'all'){
-    $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
-    $lp = $_SESSION['logdb']['prefix'];
-    $uid = intval($_SESSION['user_id']);
-    $ids = array();
-    $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
-    if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
-    $ldb->close();
-    if($ids){
-      $query = "SELECT ID,post_title,post_content,post_name FROM {$prefix}posts WHERE ID IN (".implode(',',$ids).")";
+      $ldb = connect_local();
+      if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+      $lp = $_SESSION['logdb']['prefix'];
+      $uid = intval($_SESSION['user_id']);
+      $ids = array();
+      $ires = $ldb->query("SELECT product_id FROM {$lp}product_assignments WHERE user_id=$uid");
+      if($ires){ while($i=$ires->fetch_assoc()){ $ids[] = intval($i['product_id']); } $ires->close(); }
+      $ldb->close();
+      if($ids){
+        $query .= " AND ID IN (".implode(',', $ids).")";
+      }else{
+        // اگر هیچ تخصیصی وجود نداشته باشد هیچ محصولی نمایش داده نشود
+        $query .= " AND 1=0";
+      }
     }
-    // اگر هیچ تخصیصی وجود نداشته باشد همه محصولات نمایش داده می‌شوند
-  }
   try{
     $res = $db->query($query);
-    if(!$res){ throw new Exception($db->error); }
+  if(!$res){ throw new Exception($db->error); }
     $rows = array();
     $scheme = isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http';
     $site = $scheme.'://'.$_SERVER['HTTP_HOST'];
     $scores = array();
     $ldb = connect_local();
-    if($ldb){
+  if($ldb){
       $lp = $_SESSION['logdb']['prefix'];
       $scRes = $ldb->query("SELECT product_id,score FROM {$lp}product_seo_scores");
       if($scRes){ while($sc=$scRes->fetch_assoc()){ $scores[intval($sc['product_id'])]=intval($sc['score']); } $scRes->close(); }
@@ -901,14 +1194,14 @@ case 'get_product':
   $perm = $_SESSION['permissions'] ?? '';
   if($perm !== 'all'){
     $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
+  if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
     $lp = $_SESSION['logdb']['prefix'];
     $uid = intval($_SESSION['user_id']);
     $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
     $allowed = ($check && $check->num_rows>0);
     $check && $check->close();
     $ldb->close();
-    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
   }
   $pRes = $db->query("SELECT post_title,post_content,post_name FROM {$prefix}posts WHERE ID=$id");
   $p = $pRes ? $pRes->fetch_assoc() : null;
@@ -971,7 +1264,8 @@ case 'get_product':
     '{{RELATED_TOPIC_1}}'=>'',
     '{{RELATED_TOPIC_2}}'=>''
   ), $selected, $p['post_content']);
-  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $primaryKeyword ?: $p['post_title']);
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $primaryKeyword ?: $p['post_title'], $siteBase);
   echo json_encode(array(
     'success'=>true,
     'product'=>array('id'=>$id,'name'=>$p['post_title'],'slug'=>$p['post_name'],'description'=>$p['post_content'],'price'=>$price),
@@ -991,27 +1285,71 @@ case 'save_product':
   $db = connect(); if(!$db) break;
   $prefix = $_SESSION['db']['prefix'];
   $id = intval($_POST['id']);
+  $nameRaw = $_POST['name'] ?? '';
+  $slugRaw = $_POST['slug'] ?? '';
+  $oldSlugInput = $_POST['old_slug'] ?? '';
+  $descRaw = $_POST['description'] ?? '';
+  $priceRaw = $_POST['price'] ?? '';
+  $stockRaw = $_POST['stock_status'] ?? '';
+  $seoTitleInput = $_POST['seo_title'] ?? '';
+  $seoDescInput = $_POST['seo_desc'] ?? '';
+  $focusKwInput = $_POST['focus_kw'] ?? '';
   $perm = $_SESSION['permissions'] ?? '';
-  if($perm !== 'all'){
-    $ldb = connect_local();
-    if(!$ldb){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); $db->close(); break; }
-    $lp = $_SESSION['logdb']['prefix'];
-    $uid = intval($_SESSION['user_id']);
-    $check = $ldb->query("SELECT 1 FROM {$lp}product_assignments WHERE user_id=$uid AND product_id=$id");
-    $allowed = ($check && $check->num_rows>0);
-    $check && $check->close();
-    $ldb->close();
-    if(!$allowed){ $db->close(); echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز')); break; }
+  $ldb = connect_local();
+  if(!$ldb){ $db->close(); echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $lp = $_SESSION['logdb']['prefix'];
+  ensure_kpi_tables($ldb,$lp);
+  $uid = intval($_SESSION['user_id']);
+  $assignedUserId = null;
+  $assignRes = $ldb->query("SELECT user_id FROM {$lp}product_assignments WHERE product_id=$id");
+  if($assignRes){
+    $assignRow = $assignRes->fetch_assoc();
+    if($assignRow && $assignRow['user_id'] !== null){ $assignedUserId = intval($assignRow['user_id']); }
+    $assignRes->close();
   }
-  $name = $db->real_escape_string($_POST['name']);
-  $slug = $db->real_escape_string($_POST['slug']);
-  $old_slug = isset($_POST['old_slug']) ? $db->real_escape_string($_POST['old_slug']) : '';
-  $desc = $db->real_escape_string($_POST['description']);
-  $price = $db->real_escape_string($_POST['price']);
-  $stock = $db->real_escape_string($_POST['stock_status']);
-  $oldRes = $db->query("SELECT post_content FROM {$prefix}posts WHERE ID=$id");
-  $oldRow = $oldRes ? $oldRes->fetch_assoc() : null;
-  $oldContent = $oldRow ? $oldRow['post_content'] : '';
+  if($perm !== 'all' && $assignedUserId !== $uid){
+    $ldb->close();
+    $db->close();
+    echo json_encode(array('success'=>false,'message'=>'دسترسی غیرمجاز'));
+    break;
+  }
+  $prodRes = $db->query("SELECT post_title, post_name, post_content FROM {$prefix}posts WHERE ID=$id");
+  $prodRow = $prodRes ? $prodRes->fetch_assoc() : null;
+  if($prodRes){ $prodRes->close(); }
+  $oldName = $prodRow ? $prodRow['post_title'] : '';
+  $oldContent = $prodRow ? $prodRow['post_content'] : '';
+  $oldSlug = $prodRow ? $prodRow['post_name'] : '';
+  $metaMap = array();
+  $metaRes = $db->query("SELECT meta_key, meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_title','_yoast_wpseo_metadesc','_yoast_wpseo_focuskw')");
+  if($metaRes){
+    while($m = $metaRes->fetch_assoc()){
+      $metaMap[$m['meta_key']] = $m['meta_value'];
+    }
+    $metaRes->close();
+  }
+  $oldSeoTitle = $metaMap['_yoast_wpseo_title'] ?? $oldName;
+  $oldSeoDesc = $metaMap['_yoast_wpseo_metadesc'] ?? '';
+  $oldFocus = $metaMap['_yoast_wpseo_focuskw'] ?? $oldName;
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $oldScore = null;
+  $scoreRes = $ldb->query("SELECT score FROM {$lp}product_seo_scores WHERE product_id=$id");
+  if($scoreRes){
+    $scoreRow = $scoreRes->fetch_assoc();
+    if($scoreRow && $scoreRow['score'] !== null){ $oldScore = floatval($scoreRow['score']); }
+    $scoreRes->close();
+  }
+  if($oldScore === null){
+    $analysisBefore = SEOAnalyzer::analyze($oldSeoTitle ?: $oldName, $oldSeoDesc, $oldContent, $oldFocus ?: $oldName, $siteBase);
+    $oldScore = $analysisBefore['score'];
+  }
+  $wordsBefore = estimate_word_count($oldContent);
+  $name = $db->real_escape_string($nameRaw);
+  $slug = $db->real_escape_string($slugRaw);
+  $old_slug = $db->real_escape_string($oldSlugInput);
+  $desc = $db->real_escape_string($descRaw);
+  $priceClean = preg_replace('/[^0-9.]/','',$priceRaw);
+  $price = $db->real_escape_string($priceClean);
+  $stock = $db->real_escape_string($stockRaw);
   $db->query("UPDATE {$prefix}posts SET post_title='$name', post_name='$slug', post_content='$desc' WHERE ID=$id");
   $meta = $db->query("SELECT meta_id FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_price'");
   if($meta && $meta->num_rows){
@@ -1019,24 +1357,26 @@ case 'save_product':
   }else{
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_price','$price')");
   }
+  if($meta){ $meta->close(); }
   $meta = $db->query("SELECT meta_id FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_stock_status'");
   if($meta && $meta->num_rows){
     $db->query("UPDATE {$prefix}postmeta SET meta_value='$stock' WHERE post_id=$id AND meta_key='_stock_status'");
   }else{
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_stock_status','$stock')");
   }
+  if($meta){ $meta->close(); }
   $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key IN ('_yoast_wpseo_title','_yoast_wpseo_metadesc')");
-  if(isset($_POST['seo_title'])){
-    $st = $db->real_escape_string($_POST['seo_title']);
+  if($seoTitleInput !== ''){
+    $st = $db->real_escape_string($seoTitleInput);
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_title','$st')");
   }
-  if(isset($_POST['seo_desc'])){
-    $sd = $db->real_escape_string($_POST['seo_desc']);
+  if($seoDescInput !== ''){
+    $sd = $db->real_escape_string($seoDescInput);
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_metadesc','$sd')");
   }
   $db->query("DELETE FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
-  if(isset($_POST['focus_kw'])){
-    $fk = $db->real_escape_string($_POST['focus_kw']);
+  if($focusKwInput !== ''){
+    $fk = $db->real_escape_string($focusKwInput);
     $db->query("INSERT INTO {$prefix}postmeta(post_id,meta_key,meta_value) VALUES ($id,'_yoast_wpseo_focuskw','$fk')");
   }
   $db->query("DELETE tr FROM {$prefix}term_relationships tr JOIN {$prefix}term_taxonomy tt ON tr.term_taxonomy_id=tt.term_taxonomy_id WHERE tr.object_id=$id AND tt.taxonomy='product_cat'");
@@ -1049,37 +1389,75 @@ case 'save_product':
          $ttid = $tt['term_taxonomy_id'];
          $db->query("INSERT INTO {$prefix}term_relationships (object_id,term_taxonomy_id) VALUES ($id,$ttid)");
        }
+       if($ttRes){ $ttRes->close(); }
      }
   }
   $redirect_success = false;
-  if($old_slug && $old_slug !== $slug){
+  if($oldSlugInput && $oldSlugInput !== $slugRaw){
     $check = $db->query("SHOW TABLES LIKE '{$prefix}yoast_redirects'");
     if($check && $check->num_rows){
-      $oldPath = '/'.$old_slug.'/';
+      $oldPath = '/'.$db->real_escape_string($oldSlugInput).'/';
       $newPath = '/'.$slug.'/';
       if($db->query("INSERT INTO {$prefix}yoast_redirects (origin,target,type) VALUES ('$oldPath','$newPath','301')")){
         $redirect_success = true;
       }
     }
+    if($check){ $check->close(); }
   }
-  // log content history
-  $ldb = connect_local();
-  if($ldb){
-    $lp = $_SESSION['logdb']['prefix'];
-    $vres = $ldb->query("SELECT MAX(version) v FROM {$lp}product_content_history WHERE product_id=$id");
-    $vrow = $vres ? $vres->fetch_assoc() : null;
-    $next = $vrow ? intval($vrow['v'])+1 : 1;
-    $uid = intval($_SESSION['user_id']);
-    $stmt = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
-    if($stmt){
-      $stmt->bind_param('issii',$id,$oldContent,$desc,$uid,$next);
-      $stmt->execute();
-      $stmt->close();
+  $vres = $ldb->query("SELECT MAX(version) v FROM {$lp}product_content_history WHERE product_id=$id");
+  $vrow = $vres ? $vres->fetch_assoc() : null;
+  $next = $vrow ? intval($vrow['v'])+1 : 1;
+  if($vres){ $vres->close(); }
+  $stmtHist = $ldb->prepare("INSERT INTO {$lp}product_content_history (product_id, old_content, new_content, changed_by, changed_at, version) VALUES (?,?,?,?,NOW(),?)");
+  $historyId = 0;
+  if($stmtHist){
+    $stmtHist->bind_param('issii',$id,$oldContent,$descRaw,$uid,$next);
+    $stmtHist->execute();
+    $historyId = $stmtHist->insert_id ?: $ldb->insert_id;
+    $stmtHist->close();
+  }
+  $analysisAfter = SEOAnalyzer::analyze($seoTitleInput ?: $nameRaw, $seoDescInput, $descRaw, $focusKwInput ?: $nameRaw, $siteBase);
+  $newScore = $analysisAfter['score'];
+  $detailsJson = json_encode($analysisAfter['details'],JSON_UNESCAPED_UNICODE);
+  $stmtScore = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
+  if($stmtScore){
+    $newScoreInt = intval($newScore);
+    $stmtScore->bind_param('iis',$id,$newScoreInt,$detailsJson);
+    $stmtScore->execute();
+    $stmtScore->close();
+  }
+  $wordsAfter = estimate_word_count($descRaw);
+  $wordDelta = $wordsAfter - $wordsBefore;
+  $wordsAdded = $wordDelta > 0 ? $wordDelta : 0;
+  $improvement = $newScore - $oldScore;
+  $activityMinutes = estimate_activity_minutes($wordsBefore,$wordsAfter);
+  if($historyId){
+    $assignedBind = $assignedUserId !== null ? intval($assignedUserId) : 0;
+    $editedAt = date('Y-m-d H:i:s');
+    $seoBeforeVal = $oldScore !== null ? floatval($oldScore) : 0;
+    $seoAfterVal = floatval($newScore);
+    $improvementVal = ($oldScore !== null) ? floatval($improvement) : 0;
+    $stmtEvent = $ldb->prepare("INSERT INTO {$lp}user_kpi_events (history_id,user_id,product_id,assigned_user_id,edited_at,seo_before,seo_after,seo_improvement,words_before,words_after,words_delta,words_added,activity_minutes) VALUES (?,?,?,NULLIF(?,0),?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE assigned_user_id=VALUES(assigned_user_id), seo_before=VALUES(seo_before), seo_after=VALUES(seo_after), seo_improvement=VALUES(seo_improvement), words_before=VALUES(words_before), words_after=VALUES(words_after), words_delta=VALUES(words_delta), words_added=VALUES(words_added), activity_minutes=VALUES(activity_minutes))");
+    if($stmtEvent){
+      $stmtEvent->bind_param('iiiisdddiiiid',$historyId,$uid,$id,$assignedBind,$editedAt,$seoBeforeVal,$seoAfterVal,$improvementVal,$wordsBefore,$wordsAfter,$wordDelta,$wordsAdded,$activityMinutes);
+      $stmtEvent->execute();
+      $stmtEvent->close();
     }
-    $ldb->close();
+  }
+  $assignedHit = ($assignedUserId !== null && $assignedUserId === $uid) ? 1 : 0;
+  $seoBeforeSum = $oldScore !== null ? floatval($oldScore) : 0;
+  $seoAfterSum = floatval($newScore);
+  $improvementSum = ($oldScore !== null) ? floatval($improvement) : 0;
+  $stmtDaily = $ldb->prepare("INSERT INTO {$lp}user_kpi_daily (date,user_id,total_edits,assigned_edits,seo_before_sum,seo_after_sum,improvement_sum,activity_minutes,words_added_sum,words_total_sum) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE total_edits=total_edits+VALUES(total_edits), assigned_edits=assigned_edits+VALUES(assigned_edits), seo_before_sum=seo_before_sum+VALUES(seo_before_sum), seo_after_sum=seo_after_sum+VALUES(seo_after_sum), improvement_sum=improvement_sum+VALUES(improvement_sum), activity_minutes=activity_minutes+VALUES(activity_minutes), words_added_sum=words_added_sum+VALUES(words_added_sum), words_total_sum=words_total_sum+VALUES(words_total_sum)");
+  if($stmtDaily){
+    $today = date('Y-m-d');
+    $stmtDaily->bind_param('siiiddddii',$today,$uid,1,$assignedHit,$seoBeforeSum,$seoAfterSum,$improvementSum,$activityMinutes,$wordsAdded,$wordsAfter);
+    $stmtDaily->execute();
+    $stmtDaily->close();
   }
   $product_url = (isset($_POST['product_url']) && $_POST['product_url']) ? $_POST['product_url'] : ('https://'.($_SERVER['HTTP_HOST'] ?? '').'/'.$slug.'/');
   $indexRes = google_index_url($product_url);
+  $ldb->close();
   echo json_encode(array('success'=>true,'redirect'=>$redirect_success,'indexed'=>$indexRes[0],'index_log'=>$indexRes[1]));
   $db->close();
   break;
@@ -1097,12 +1475,13 @@ case 'analyze_product_seo':
   $descRow = $descRes ? $descRes->fetch_assoc() : null; $seoDesc = ($descRow['meta_value'] ?? '');
   $focusRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
   $focusRow = $focusRes ? $focusRes->fetch_assoc() : null; $focus = ($focusRow['meta_value'] ?? $p['post_title']);
-  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus);
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus, $siteBase);
   $ldb = connect_local();
   if($ldb){
     $lp = $_SESSION['logdb']['prefix'];
     $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
-    if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
+  if($stmt){ $det = json_encode($analysis['details'],JSON_UNESCAPED_UNICODE); $stmt->bind_param('iis',$id,$analysis['score'],$det); $stmt->execute(); $stmt->close(); }
     $ldb->close();
   }
   $db->close();
@@ -1114,7 +1493,8 @@ case 'analyze_seo':
   $desc  = $_POST['desc'] ?? '';
   $content = $_POST['content'] ?? '';
   $focus = $_POST['focus'] ?? $title;
-  $analysis = SEOAnalyzer::analyze($title,$desc,$content,$focus);
+  $siteBase = $_SESSION['site_base_url'] ?? '';
+  $analysis = SEOAnalyzer::analyze($title,$desc,$content,$focus,$siteBase);
   echo json_encode(array('success'=>true,'data'=>$analysis,'suggestions'=>array('title'=>SEOAnalyzer::suggestTitle($title),'meta'=>SEOAnalyzer::suggestMeta($title))));
   break;
 
@@ -1124,6 +1504,7 @@ case 'bulk_analyze_product_seo':
   $res = $db->query("SELECT ID,post_title,post_content FROM {$prefix}posts WHERE post_type='product' AND post_status='publish'");
   $count = 0;
   $ldb = connect_local();
+  $siteBase = $_SESSION['site_base_url'] ?? '';
   if($res){
     while($p=$res->fetch_assoc()){
       $id = intval($p['ID']);
@@ -1133,7 +1514,7 @@ case 'bulk_analyze_product_seo':
       $descRow = $descRes ? $descRes->fetch_assoc() : null; $seoDesc = ($descRow['meta_value'] ?? '');
       $focusRes = $db->query("SELECT meta_value FROM {$prefix}postmeta WHERE post_id=$id AND meta_key='_yoast_wpseo_focuskw'");
       $focusRow = $focusRes ? $focusRes->fetch_assoc() : null; $focus = ($focusRow['meta_value'] ?? $p['post_title']);
-      $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus);
+      $analysis = SEOAnalyzer::analyze($seoTitle ?: $p['post_title'], $seoDesc, $p['post_content'], $focus, $siteBase);
       if($ldb){
         $lp = $_SESSION['logdb']['prefix'];
         $stmt = $ldb->prepare("REPLACE INTO {$lp}product_seo_scores (product_id,score,details,analyzed_at) VALUES (?,?,?,NOW())");
@@ -1213,7 +1594,7 @@ case 'sync_internal_links':
   if($cfg){
     try{ $wdb = new mysqli($cfg['host'],$cfg['user'],$cfg['pass'],$cfg['name']); }
     catch(mysqli_sql_exception $e){ $wdb = null; }
-    if($wdb && !$wdb->connect_errno){
+  if($wdb && !$wdb->connect_errno){
       $wdb->set_charset('utf8mb4');
       $wp = $cfg['prefix'];
       $base = '';
@@ -1520,9 +1901,155 @@ case 'list_process_queue':
   $totalRes = $db->query("SELECT COUNT(*) c FROM {$prefix}posts WHERE post_type='product'");
   $total = $totalRes ? $totalRes->fetch_assoc()['c'] : 0;
  $price = array('labels'=>array('بدون قیمت','دارای قیمت'),'data'=>array($withoutPrice,$total-$withoutPrice));
- echo json_encode(array('success'=>true,'cat'=>$cat,'seo'=>$seo,'stock'=>$stock,'price'=>$price));
- $db->close();
- break;
+echo json_encode(array('success'=>true,'cat'=>$cat,'seo'=>$seo,'stock'=>$stock,'price'=>$price));
+$db->close();
+break;
+case 'user_kpi_summary':
+  if(!has_perm('view_kpis')){ echo json_encode(array('success'=>false,'message'=>'عدم دسترسی')); break; }
+  date_default_timezone_set('Asia/Tehran');
+  $range = $_POST['range'] ?? 'day';
+  $validRanges = array('day','week','month');
+  if(!in_array($range,$validRanges)){ $range='day'; }
+  $end = date('Y-m-d');
+  $start = $end;
+  $rangeLabel = 'امروز';
+  if($range==='week'){ $start = date('Y-m-d',strtotime('-6 days',strtotime($end))); $rangeLabel='۷ روز اخیر'; }
+  elseif($range==='month'){ $start = date('Y-m-d',strtotime('-29 days',strtotime($end))); $rangeLabel='۳۰ روز اخیر'; }
+  $db = connect_local();
+  if(!$db){ echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده سامانه')); break; }
+  $prefix = $_SESSION['logdb']['prefix'];
+  $kpiEnsure = ensure_kpi_tables($db,$prefix);
+  if(!empty($kpiEnsure)){
+    if(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'user_kpi_summary','stage'=>'schema_errors','errors'=>$kpiEnsure));
+    }
+    $db->close();
+    echo json_encode(array('success'=>false,'message'=>'جداول KPI در دسترس نیستند'));
+    break;
+  }
+  $manager = new UserManager($db,$prefix);
+  $usersList = $manager->all();
+  $userMap = array();
+  foreach($usersList as $u){
+    $uid = intval($u['id']);
+    $labelName = trim($u['full_name'] ?? '');
+    if(!$labelName){ $labelName = $u['username']; }
+    $userMap[$uid] = array('label'=>$labelName,'username'=>$u['username']);
+  }
+  $stmt = $db->prepare("SELECT user_id,SUM(total_edits) AS total_edits,SUM(assigned_edits) AS assigned_edits,SUM(seo_before_sum) AS seo_before_sum,SUM(seo_after_sum) AS seo_after_sum,SUM(improvement_sum) AS improvement_sum,SUM(activity_minutes) AS activity_minutes,SUM(words_added_sum) AS words_added_sum,SUM(words_total_sum) AS words_total_sum FROM {$prefix}user_kpi_daily WHERE date BETWEEN ? AND ? GROUP BY user_id");
+  $stmt->bind_param('ss',$start,$end);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $records = array();
+  $totalEditsRange = 0;
+  $totalImprovementSum = 0;
+  while($row=$res->fetch_assoc()){
+    $uid = intval($row['user_id']);
+    $edits = intval($row['total_edits']);
+    $avgBefore = $edits>0 ? round(floatval($row['seo_before_sum'])/$edits,2) : 0;
+    $avgAfter = $edits>0 ? round(floatval($row['seo_after_sum'])/$edits,2) : 0;
+    $imprAvg = $edits>0 ? round(floatval($row['improvement_sum'])/$edits,2) : 0;
+    $activity = round(floatval($row['activity_minutes']),2);
+    $wordsAdded = intval($row['words_added_sum']);
+    $wordsTotal = intval($row['words_total_sum']);
+    $assigned = intval($row['assigned_edits']);
+    $labelName = $userMap[$uid]['label'] ?? ('کاربر '.$uid);
+    $records[] = array(
+      'user_id'=>$uid,
+      'label'=>$labelName,
+      'username'=>$userMap[$uid]['username'] ?? '',
+      'total_edits'=>$edits,
+      'assigned_edits'=>$assigned,
+      'avg_before'=>$avgBefore,
+      'avg_after'=>$avgAfter,
+      'improvement_avg'=>$imprAvg,
+      'improvement_sum'=>round(floatval($row['improvement_sum']),2),
+      'activity_minutes'=>$activity,
+      'words_added'=>$wordsAdded,
+      'words_total'=>$wordsTotal
+    );
+    $totalEditsRange += $edits;
+    $totalImprovementSum += floatval($row['improvement_sum']);
+  }
+  $stmt->close();
+  $barOrder = $records;
+  usort($barOrder,function($a,$b){
+    if($b['total_edits'] === $a['total_edits']){
+      return $b['improvement_avg'] <=> $a['improvement_avg'];
+    }
+    return $b['total_edits'] <=> $a['total_edits'];
+  });
+  $barSlice = array_slice($barOrder,0,10);
+  $barLabels = array();
+  $barValues = array();
+  foreach($barSlice as $entry){
+    $barLabels[] = $entry['label'];
+    $barValues[] = $entry['total_edits'];
+  }
+  $pieLabels = array();
+  $pieValues = array();
+  foreach($barOrder as $entry){
+    $pieLabels[] = $entry['label'];
+    $pieValues[] = $entry['total_edits'];
+  }
+  $stmt = $db->prepare("SELECT date,user_id,total_edits,seo_after_sum FROM {$prefix}user_kpi_daily WHERE date BETWEEN ? AND ? ORDER BY date ASC");
+  $stmt->bind_param('ss',$start,$end);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  $lineLabels = array();
+  $linePoints = array();
+  while($row=$res->fetch_assoc()){
+    $dateKey = $row['date'];
+    if(!in_array($dateKey,$lineLabels)){ $lineLabels[] = $dateKey; }
+    $uid = intval($row['user_id']);
+    if(!isset($linePoints[$uid])){ $linePoints[$uid] = array(); }
+    $avgAfterDay = intval($row['total_edits'])>0 ? round(floatval($row['seo_after_sum'])/intval($row['total_edits']),2) : null;
+    $linePoints[$uid][$dateKey] = $avgAfterDay;
+  }
+  $stmt->close();
+  $lineDatasets = array();
+  foreach($linePoints as $uid=>$points){
+    $series = array();
+    foreach($lineLabels as $d){ $series[] = array_key_exists($d,$points) ? $points[$d] : null; }
+    $lineDatasets[] = array(
+      'user_id'=>$uid,
+      'label'=>$userMap[$uid]['label'] ?? ('کاربر '.$uid),
+      'data'=>$series
+    );
+  }
+  $bestUser = array('name'=>'-','edits'=>0,'improvement'=>0);
+  if(!empty($barOrder)){
+    $top = $barOrder[0];
+    $bestUser['name'] = $top['label'];
+    $bestUser['edits'] = intval($top['total_edits']);
+    $bestUser['improvement'] = isset($top['improvement_sum']) ? floatval($top['improvement_sum']) : 0;
+  }
+  $updatedAt = null;
+  $lastRes = $db->query("SELECT MAX(edited_at) AS last_edit FROM {$prefix}user_kpi_events");
+  if($lastRes){ $lastRow = $lastRes->fetch_assoc(); if($lastRow && $lastRow['last_edit']){ $updatedAt = $lastRow['last_edit']; } $lastRes->close(); }
+  $cards = array(
+    'total_label'=>'مجموع ویرایش‌های '.$rangeLabel,
+    'total_edits'=>$totalEditsRange,
+    'best_label'=>$range==='day' ? 'بهترین کاربر امروز' : 'برترین کاربر '.$rangeLabel,
+    'best_user'=>$bestUser,
+    'avg_improvement_label'=>'میانگین بهبود کل',
+    'avg_improvement'=>$totalEditsRange>0 ? round($totalImprovementSum/$totalEditsRange,2) : 0
+  );
+  $leaderboard = $barOrder;
+  $db->close();
+  echo json_encode(array(
+    'success'=>true,
+    'range'=>$range,
+    'range_label'=>$rangeLabel,
+    'cards'=>$cards,
+    'bar'=>array('labels'=>$barLabels,'data'=>$barValues),
+    'pie'=>array('labels'=>$pieLabels,'data'=>$pieValues),
+    'line'=>array('labels'=>$lineLabels,'datasets'=>$lineDatasets),
+    'leaderboard'=>$leaderboard,
+    'total_edits'=>$totalEditsRange,
+    'updated_at'=>$updatedAt
+  ));
+  break;
 case 'check_config':
   $cfg = secure_load_config();
   if(!$cfg){ echo json_encode(array('success'=>false,'message'=>'تنظیمات موجود نیست')); break; }
@@ -1538,7 +2065,7 @@ default:
 function connect(){
   if(!isset($_SESSION['db'])){
     $cfg = secure_load_config();
-    if(!$cfg){
+  if(!$cfg){
       echo json_encode(array('success'=>false,'message'=>'عدم اتصال به پایگاه داده'));
       return false;
     }
@@ -1557,6 +2084,24 @@ function connect(){
     return false;
   }
   $mysqli->set_charset('utf8mb4');
+  if(!isset($_SESSION['site_base_url']) || !$_SESSION['site_base_url']){
+    $site='';
+    $sql="SELECT option_name,option_value FROM {$cfg['prefix']}options WHERE option_name IN ('home','siteurl')";
+    if($optRes=$mysqli->query($sql)){
+      while($row=$optRes->fetch_assoc()){
+        $value=trim($row['option_value']);
+        if(!$value) continue;
+        $value=rtrim($value,'/');
+        if(!$site || $row['option_name']=='home'){
+          $site=$value;
+        }
+      }
+      $optRes->close();
+    }
+    if($site){
+      $_SESSION['site_base_url']=$site;
+    }
+  }
   return $mysqli;
 }
 
@@ -1575,7 +2120,7 @@ function secure_load_config(){
 function connect_local(){
   if(!isset($_SESSION['logdb'])){
     $cfg = secure_load_local_config();
-    if(!$cfg) return false;
+  if(!$cfg) return false;
     $_SESSION['logdb'] = $cfg;
   } else {
     $cfg = $_SESSION['logdb'];
@@ -1584,28 +2129,350 @@ function connect_local(){
   catch(mysqli_sql_exception $e){ return false; }
   if($mysqli->connect_errno) return false;
   $mysqli->set_charset('utf8mb4');
-  init_local_tables($mysqli,$cfg['prefix']);
+  $schemaErrors = init_local_tables($mysqli,$cfg['prefix']);
+  if(!empty($schemaErrors) && msw_debug_enabled()){
+    msw_debug_write_log(array('id'=>'connect_local','stage'=>'schema_errors','errors'=>$schemaErrors));
+  }
   seed_content_history_if_empty($mysqli,$cfg['prefix']);
   return $mysqli;
 }
 
-function init_local_tables($db,$prefix){
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}logs (id INT AUTO_INCREMENT PRIMARY KEY, action VARCHAR(20), ip VARCHAR(45), ts DATETIME)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}roles (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, permissions TEXT)");
-  $db->query("INSERT INTO {$prefix}roles(id,name,permissions) VALUES (1,'مدیر کل','all') ON DUPLICATE KEY UPDATE name='مدیر کل', permissions='all'");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(191) UNIQUE, password_hash VARCHAR(255) NOT NULL, full_name VARCHAR(191), phone_number VARCHAR(20), role_id INT, status VARCHAR(20) DEFAULT 'active', created_at DATETIME, updated_at DATETIME, FOREIGN KEY (role_id) REFERENCES {$prefix}roles(id))");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}clients (id INT AUTO_INCREMENT PRIMARY KEY, client_name VARCHAR(191), api_key VARCHAR(191), client_secret VARCHAR(191), redirect_uri TEXT, status VARCHAR(20))");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}user_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, action VARCHAR(50), timestamp DATETIME, ip_address VARCHAR(45), country VARCHAR(100), city VARCHAR(100), isp VARCHAR(191), FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_assignments (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, product_id BIGINT, assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY product_unique (product_id), KEY user_idx (user_id))");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}assignment_modes (user_id INT PRIMARY KEY, mode VARCHAR(20), quota_min INT, quota_max INT, category_id BIGINT, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}password_resets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, reset_token VARCHAR(255), expires_at DATETIME, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}settings (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, value TEXT)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_content_history (id BIGINT AUTO_INCREMENT PRIMARY KEY, product_id BIGINT, old_content LONGTEXT, new_content LONGTEXT, changed_by INT, changed_at DATETIME, version INT, FOREIGN KEY (changed_by) REFERENCES {$prefix}users(id) ON DELETE SET NULL)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}product_seo_scores (product_id BIGINT PRIMARY KEY, score INT, details LONGTEXT, analyzed_at DATETIME)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}processes (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, active TINYINT(1) DEFAULT 1, interval_hours INT, last_run DATETIME, timezone VARCHAR(50) DEFAULT 'Asia/Tehran')");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}process_queue (id INT AUTO_INCREMENT PRIMARY KEY, process_name VARCHAR(255), status ENUM('pending','running','completed','failed') DEFAULT 'pending', started_at DATETIME NULL, finished_at DATETIME NULL, result TEXT NULL)");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}internal_links (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(191) UNIQUE, url TEXT, title VARCHAR(191))");
-  $db->query("CREATE TABLE IF NOT EXISTS {$prefix}external_links (id INT AUTO_INCREMENT PRIMARY KEY, url TEXT, title VARCHAR(191))");
+function msw_execute_schema($db,$sql,$label,$debug=null,&$errors=array()){
+  $success = true;
+  try{
+    $result = $db->query($sql);
+    if($result === false){
+      $success = false;
+      $error = $db->error;
+      $errors[$label] = $error;
+      if($debug instanceof MswDebugCollector){
+        $debug->checkpoint('schema_query_failed',array('statement'=>$label,'error'=>$error));
+      } elseif(msw_debug_enabled()){
+        msw_debug_write_log(array('id'=>'schema','stage'=>'query_failed','statement'=>$label,'error'=>$error));
+      }
+    }
+  }catch(mysqli_sql_exception $e){
+    $success = false;
+    $error = $e->getMessage();
+    $errors[$label] = $error;
+    if($debug instanceof MswDebugCollector){
+      $debug->checkpoint('schema_query_exception',array('statement'=>$label,'error'=>$error));
+    } elseif(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'schema','stage'=>'query_exception','statement'=>$label,'error'=>$error));
+    }
+  }
+  return $success;
+}
+
+function msw_is_foreign_key_error($error){
+  if(!is_string($error) || $error === ''){
+    return false;
+  }
+  $err = strtolower($error);
+  return strpos($err,'errno: 150') !== false ||
+         strpos($err,'foreign key constraint') !== false ||
+         strpos($err,'cannot add foreign key') !== false;
+}
+
+function msw_get_table_engine($db,$table){
+  $stmt = $db->prepare("SELECT ENGINE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?");
+  if(!$stmt){
+    return null;
+  }
+  $stmt->bind_param('s',$table);
+  if(!$stmt->execute()){
+    $stmt->close();
+    return null;
+  }
+  $stmt->bind_result($engine);
+  $result = null;
+  if($stmt->fetch()){
+    $result = $engine;
+  }
+  $stmt->close();
+  return $result;
+}
+
+function msw_is_safe_identifier($identifier){
+  return is_string($identifier) && preg_match('/^[A-Za-z0-9_]+$/',$identifier);
+}
+
+function msw_ensure_innodb_table($db,$table,$debug=null){
+  $engine = msw_get_table_engine($db,$table);
+  if($engine === null || strtoupper($engine) === 'INNODB'){
+    return;
+  }
+  if(!msw_is_safe_identifier($table)){
+    return;
+  }
+  $sql = "ALTER TABLE `{$table}` ENGINE=InnoDB";
+  try{
+    $result = $db->query($sql);
+    if($result === false){
+      $error = $db->error;
+      if($debug instanceof MswDebugCollector){
+        $debug->checkpoint('schema_engine_update_failed',array('table'=>$table,'error'=>$error));
+      } elseif(msw_debug_enabled()){
+        msw_debug_write_log(array('id'=>'schema','stage'=>'engine_update_failed','table'=>$table,'error'=>$error));
+      }
+    }
+  }catch(mysqli_sql_exception $e){
+    $error = $e->getMessage();
+    if($debug instanceof MswDebugCollector){
+      $debug->checkpoint('schema_engine_update_exception',array('table'=>$table,'error'=>$error));
+    } elseif(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'schema','stage'=>'engine_update_exception','table'=>$table,'error'=>$error));
+    }
+  }
+}
+
+function msw_get_column_type($db,$table,$column){
+  $stmt = $db->prepare("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+  if(!$stmt){
+    return null;
+  }
+  $stmt->bind_param('ss',$table,$column);
+  if(!$stmt->execute()){
+    $stmt->close();
+    return null;
+  }
+  $stmt->bind_result($type);
+  $result = null;
+  if($stmt->fetch()){
+    $normalized = strtoupper((string)$type);
+    $normalized = preg_replace('/\s+/',' ',$normalized);
+    $result = trim($normalized);
+  }
+  $stmt->close();
+  return $result;
+}
+
+function format_schema_error_message(array $schemaErrors){
+  if(empty($schemaErrors)){
+    return '';
+  }
+  $parts = array();
+  foreach($schemaErrors as $label=>$error){
+    $text = trim((string)$error);
+    if($text === ''){
+      continue;
+    }
+    if(is_string($label) && $label !== ''){
+      $parts[] = $label.': '.$text;
+    } else {
+      $parts[] = $text;
+    }
+  }
+  if(empty($parts)){
+    return '';
+  }
+  $parts = array_values(array_unique($parts));
+  $message = implode(' | ',$parts);
+  return preg_replace('/\s+/u',' ',trim($message));
+}
+
+function init_local_tables($db,$prefix,$debug=null){
+  $errors = array();
+  $queries = array(
+    'logs' => "CREATE TABLE IF NOT EXISTS {$prefix}logs (id INT AUTO_INCREMENT PRIMARY KEY, action VARCHAR(20), ip VARCHAR(45), ts DATETIME)",
+    'roles' => "CREATE TABLE IF NOT EXISTS {$prefix}roles (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, permissions TEXT)",
+    'roles_seed' => "INSERT INTO {$prefix}roles(id,name,permissions) VALUES (1,'مدیر کل','all') ON DUPLICATE KEY UPDATE name='مدیر کل', permissions='all'",
+    'users' => "CREATE TABLE IF NOT EXISTS {$prefix}users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(191) UNIQUE, password_hash VARCHAR(255) NOT NULL, full_name VARCHAR(191), phone_number VARCHAR(20), role_id INT, status VARCHAR(20) DEFAULT 'active', created_at DATETIME, updated_at DATETIME, FOREIGN KEY (role_id) REFERENCES {$prefix}roles(id))",
+    'clients' => "CREATE TABLE IF NOT EXISTS {$prefix}clients (id INT AUTO_INCREMENT PRIMARY KEY, client_name VARCHAR(191), api_key VARCHAR(191), client_secret VARCHAR(191), redirect_uri TEXT, status VARCHAR(20))",
+    'user_logs' => "CREATE TABLE IF NOT EXISTS {$prefix}user_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, action VARCHAR(50), timestamp DATETIME, ip_address VARCHAR(45), country VARCHAR(100), city VARCHAR(100), isp VARCHAR(191), FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)",
+    'product_assignments' => "CREATE TABLE IF NOT EXISTS {$prefix}product_assignments (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, product_id BIGINT, assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY product_unique (product_id), KEY user_idx (user_id))",
+    'assignment_modes' => "CREATE TABLE IF NOT EXISTS {$prefix}assignment_modes (user_id INT PRIMARY KEY, mode VARCHAR(20), quota_min INT, quota_max INT, category_id BIGINT, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)",
+    'password_resets' => "CREATE TABLE IF NOT EXISTS {$prefix}password_resets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, reset_token VARCHAR(255), expires_at DATETIME, FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE)",
+    'settings' => "CREATE TABLE IF NOT EXISTS {$prefix}settings (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, value TEXT)",
+    'product_content_history' => "CREATE TABLE IF NOT EXISTS {$prefix}product_content_history (id BIGINT AUTO_INCREMENT PRIMARY KEY, product_id BIGINT, old_content LONGTEXT, new_content LONGTEXT, changed_by INT, changed_at DATETIME, version INT, FOREIGN KEY (changed_by) REFERENCES {$prefix}users(id) ON DELETE SET NULL)",
+    'product_seo_scores' => "CREATE TABLE IF NOT EXISTS {$prefix}product_seo_scores (product_id BIGINT PRIMARY KEY, score INT, details LONGTEXT, analyzed_at DATETIME)",
+    'processes' => "CREATE TABLE IF NOT EXISTS {$prefix}processes (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(191) UNIQUE, active TINYINT(1) DEFAULT 1, interval_hours INT, last_run DATETIME, timezone VARCHAR(50) DEFAULT 'Asia/Tehran')",
+    'process_queue' => "CREATE TABLE IF NOT EXISTS {$prefix}process_queue (id INT AUTO_INCREMENT PRIMARY KEY, process_name VARCHAR(255), status ENUM('pending','running','completed','failed') DEFAULT 'pending', started_at DATETIME NULL, finished_at DATETIME NULL, result TEXT NULL)",
+    'internal_links' => "CREATE TABLE IF NOT EXISTS {$prefix}internal_links (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(191) UNIQUE, url TEXT, title VARCHAR(191))",
+    'external_links' => "CREATE TABLE IF NOT EXISTS {$prefix}external_links (id INT AUTO_INCREMENT PRIMARY KEY, url TEXT, title VARCHAR(191))",
+    'search_console_daily' => "CREATE TABLE IF NOT EXISTS {$prefix}search_console_daily (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE,
+        site_url VARCHAR(255),
+        page VARCHAR(2083),
+        query VARCHAR(255),
+        device VARCHAR(20),
+        country VARCHAR(10),
+        clicks INT,
+        impressions INT,
+        ctr DECIMAL(5,2),
+        position DECIMAL(8,2),
+        search_appearance VARCHAR(50),
+        sessions INT NULL,
+        bounce_rate DECIMAL(5,2) NULL,
+        avg_session_duration INT NULL,
+        conversions INT NULL,
+        lcp DECIMAL(6,3) NULL,
+        cls DECIMAL(5,3) NULL,
+        fid DECIMAL(6,3) NULL,
+        ttfb DECIMAL(6,3) NULL,
+        referring_domains INT NULL,
+        anchors TEXT NULL,
+        trends_interest INT NULL,
+        UNIQUE KEY uniq (date,site_url(32),page(64),query(64),device,country,search_appearance(24))
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+  );
+  foreach($queries as $label=>$sql){
+    msw_execute_schema($db,$sql,$label,$debug,$errors);
+  }
+  $kpiErrors = ensure_kpi_tables($db,$prefix,$debug);
+  if(!empty($kpiErrors)){
+    $errors = array_merge($errors,$kpiErrors);
+  }
+  return $errors;
+}
+
+function ensure_kpi_tables($db,$prefix,$debug=null){
+  $errors = array();
+  $userTable = $prefix.'users';
+  $historyTable = $prefix.'product_content_history';
+  msw_ensure_innodb_table($db,$userTable,$debug);
+  msw_ensure_innodb_table($db,$historyTable,$debug);
+
+  $userIdType = msw_get_column_type($db,$userTable,'id');
+  if(!$userIdType){
+    $userIdType = 'INT';
+  }
+  $historyIdType = msw_get_column_type($db,$historyTable,'id');
+  if(!$historyIdType){
+    $historyIdType = 'BIGINT';
+  }
+
+  $tables = array(
+    'user_kpi_events' => array(
+      'primary' => sprintf(
+        "CREATE TABLE IF NOT EXISTS {$prefix}user_kpi_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    history_id %s UNIQUE,
+    user_id %s,
+    product_id BIGINT,
+    assigned_user_id %s NULL,
+    edited_at DATETIME,
+    seo_before DECIMAL(5,2) NULL,
+    seo_after DECIMAL(5,2) NULL,
+    seo_improvement DECIMAL(5,2) NULL,
+    words_before INT DEFAULT 0,
+    words_after INT DEFAULT 0,
+    words_delta INT DEFAULT 0,
+    words_added INT DEFAULT 0,
+    activity_minutes DECIMAL(10,2) DEFAULT 0,
+    FOREIGN KEY (history_id) REFERENCES {$prefix}product_content_history(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE,
+    FOREIGN KEY (assigned_user_id) REFERENCES {$prefix}users(id) ON DELETE SET NULL,
+    KEY idx_user_date (user_id, edited_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        $historyIdType,
+        $userIdType,
+        $userIdType
+      ),
+      'fallback' => sprintf(
+        "CREATE TABLE IF NOT EXISTS {$prefix}user_kpi_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    history_id %s UNIQUE,
+    user_id %s,
+    product_id BIGINT,
+    assigned_user_id %s NULL,
+    edited_at DATETIME,
+    seo_before DECIMAL(5,2) NULL,
+    seo_after DECIMAL(5,2) NULL,
+    seo_improvement DECIMAL(5,2) NULL,
+    words_before INT DEFAULT 0,
+    words_after INT DEFAULT 0,
+    words_delta INT DEFAULT 0,
+    words_added INT DEFAULT 0,
+    activity_minutes DECIMAL(10,2) DEFAULT 0,
+    KEY idx_user_date (user_id, edited_at),
+    KEY idx_user_kpi_events_user (user_id),
+    KEY idx_user_kpi_events_assigned (assigned_user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        $historyIdType,
+        $userIdType,
+        $userIdType
+      )
+    ),
+    'user_kpi_daily' => array(
+      'primary' => sprintf(
+        "CREATE TABLE IF NOT EXISTS {$prefix}user_kpi_daily (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    date DATE,
+    user_id %s,
+    total_edits INT DEFAULT 0,
+    assigned_edits INT DEFAULT 0,
+    seo_before_sum DECIMAL(10,2) DEFAULT 0,
+    seo_after_sum DECIMAL(10,2) DEFAULT 0,
+    improvement_sum DECIMAL(10,2) DEFAULT 0,
+    activity_minutes DECIMAL(10,2) DEFAULT 0,
+    words_added_sum INT DEFAULT 0,
+    words_total_sum INT DEFAULT 0,
+    UNIQUE KEY uniq_date_user (date,user_id),
+    FOREIGN KEY (user_id) REFERENCES {$prefix}users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        $userIdType
+      ),
+      'fallback' => sprintf(
+        "CREATE TABLE IF NOT EXISTS {$prefix}user_kpi_daily (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    date DATE,
+    user_id %s,
+    total_edits INT DEFAULT 0,
+    assigned_edits INT DEFAULT 0,
+    seo_before_sum DECIMAL(10,2) DEFAULT 0,
+    seo_after_sum DECIMAL(10,2) DEFAULT 0,
+    improvement_sum DECIMAL(10,2) DEFAULT 0,
+    activity_minutes DECIMAL(10,2) DEFAULT 0,
+    words_added_sum INT DEFAULT 0,
+    words_total_sum INT DEFAULT 0,
+    UNIQUE KEY uniq_date_user (date,user_id),
+    KEY idx_user_kpi_daily_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        $userIdType
+      )
+    )
+  );
+
+  foreach($tables as $label=>$definition){
+    $created = msw_execute_schema($db,$definition['primary'],$label,$debug,$errors);
+    if($created){
+      continue;
+    }
+    $errorText = isset($errors[$label]) ? $errors[$label] : '';
+    if(!isset($definition['fallback']) || !msw_is_foreign_key_error($errorText)){
+      continue;
+    }
+    $fallbackLabel = $label.'_nofk';
+    $fallbackCreated = msw_execute_schema($db,$definition['fallback'],$fallbackLabel,$debug,$errors);
+    if($fallbackCreated){
+      unset($errors[$label]);
+      if($debug instanceof MswDebugCollector){
+        $debug->checkpoint('schema_fk_fallback',array('statement'=>$label,'error'=>$errorText));
+      } elseif(msw_debug_enabled()){
+        msw_debug_write_log(array('id'=>'schema','stage'=>'fk_fallback','statement'=>$label,'error'=>$errorText));
+      }
+    }
+  }
+
+  return $errors;
+}
+
+function estimate_word_count($html){
+  $text = trim(strip_tags($html));
+  if($text === '') return 0;
+  $parts = preg_split('/\s+/u',$text,-1,PREG_SPLIT_NO_EMPTY);
+  return $parts ? count($parts) : 0;
+}
+
+function estimate_activity_minutes($wordsBefore,$wordsAfter){
+  $wordsBefore = max(0,intval($wordsBefore));
+  $wordsAfter = max(0,intval($wordsAfter));
+  $delta = abs($wordsAfter - $wordsBefore);
+  $base = max($wordsAfter,$delta);
+  if($base <= 0){ return 0.25; }
+  return round(max($base/120,0.25),2);
 }
 
 function seed_content_history_if_empty($db,$prefix){
@@ -1675,7 +2542,7 @@ function google_index_url($url){
   }
   if(!$token){
     $db = connect_local();
-    if($db){
+  if($db){
       $prefix = $_SESSION['logdb']['prefix'];
       $cid = get_setting($db,$prefix,'sc_client_id');
       $secret = get_setting($db,$prefix,'sc_client_secret');
@@ -1718,32 +2585,58 @@ function google_index_url($url){
 }
 
 function log_event($action){
-  $db = connect_local();
-  if(!$db) return;
+  try{
+    $db = connect_local();
+  }catch(Throwable $e){
+    if(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'log_event','stage'=>'connect_exception','action'=>$action,'error'=>$e->getMessage()));
+    }
+    return;
+  }
+  if(!$db){
+    if(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'log_event','stage'=>'connect_failed','action'=>$action));
+    }
+    return;
+  }
   $prefix = $_SESSION['logdb']['prefix'];
   $ip = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
   $uid = isset($_SESSION['user_id']) ? intval($_SESSION['user_id']) : 0;
   $dt = new DateTime('now', new DateTimeZone('Asia/Tehran'));
   $ts = $dt->format('Y-m-d H:i:s');
   $geo = array('country'=>'','city'=>'','isp'=>'');
-  $key = get_setting($db,$prefix,'ipify_key');
-  if($key){
-    $url = "https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$ip}";
-    $resp = @file_get_contents($url);
-    if($resp){
-      $data = json_decode($resp,true);
-      if($data){
-        $geo['country'] = $data['location']['country'] ?? '';
-        $geo['city'] = $data['location']['city'] ?? '';
-        $geo['isp'] = $data['isp'] ?? '';
+  try{
+    $key = get_setting($db,$prefix,'ipify_key');
+    if($key){
+      $url = "https://geo.ipify.org/api/v2/country,city?apiKey={$key}&ip={$ip}";
+      $resp = @file_get_contents($url);
+      if($resp){
+        $data = json_decode($resp,true);
+        if($data){
+          $geo['country'] = $data['location']['country'] ?? '';
+          $geo['city'] = $data['location']['city'] ?? '';
+          $geo['isp'] = $data['isp'] ?? '';
+        }
       }
+    }
+  }catch(Throwable $geoEx){
+    if(msw_debug_enabled()){
+      msw_debug_write_log(array('id'=>'log_event','stage'=>'geo_lookup_failed','action'=>$action,'error'=>$geoEx->getMessage()));
     }
   }
   $stmt = $db->prepare("INSERT INTO {$prefix}user_logs(user_id, action, ip_address, country, city, isp, timestamp) VALUES (?,?,?,?,?,?,?)");
   if($stmt){
-    $stmt->bind_param('issssss',$uid,$action,$ip,$geo['country'],$geo['city'],$geo['isp'],$ts);
-    $stmt->execute();
+    try{
+      $stmt->bind_param('issssss',$uid,$action,$ip,$geo['country'],$geo['city'],$geo['isp'],$ts);
+      $stmt->execute();
+    }catch(mysqli_sql_exception $e){
+      if(msw_debug_enabled()){
+        msw_debug_write_log(array('id'=>'log_event','stage'=>'insert_failed','action'=>$action,'error'=>$e->getMessage()));
+      }
+    }
     $stmt->close();
+  } elseif(msw_debug_enabled()){
+    msw_debug_write_log(array('id'=>'log_event','stage'=>'prepare_failed','action'=>$action,'error'=>$db->error));
   }
   $db->close();
 }
