@@ -1,6 +1,6 @@
 <?php
 class SEOAnalyzer {
-    public static function analyze($title, $meta, $content, $keyword = ''){
+    public static function analyze($title, $meta, $content, $keyword = '', $siteUrl = ''){
         $details = [];
         $score = 0;
         $keyword = trim(mb_strtolower($keyword));
@@ -58,8 +58,8 @@ class SEOAnalyzer {
         $links = $dom->getElementsByTagName('a');
         $internal = 0;
         foreach($links as $a){
-            $href = $a->getAttribute('href');
-            if($href && strpos($href,'http') !== 0) $internal++;
+            $href = trim($a->getAttribute('href'));
+            if(self::isInternalLink($href,$siteUrl)) $internal++;
         }
         if($internal > 0){
             $score += 10;
@@ -71,7 +71,7 @@ class SEOAnalyzer {
         if($avg <= 20){
             $score += 10;
         } else {
-            $details[] = ['code'=>'B4','status'=>'warn','message'=>'جملات طولانی هستند؛ بهتر است کوتاه‌تر نوشته شوند'];
+            $details[] = ['code'=>'B4','status'=>'warn','message'=>'جملات طولانی هستند؛ هر جمله را به حداکثر ۲۰ کلمه محدود کنید و با ویرگول یا نقطه آن‌ها را به چند جمله کوتاه تقسیم کنید.'];
         }
         $score = min(100,$score);
         return ['score'=>$score,'details'=>$details];
@@ -80,7 +80,56 @@ class SEOAnalyzer {
         return "خرید {$name} با بهترین قیمت";
     }
     public static function suggestMeta($name){
-        return "خرید آنلاین {$name} با ضمانت اصالت و ارسال سریع";
+        $base = "خرید {$name} از صفیر زمان با ضمانت اصالت، ارسال سریع و پشتیبانی تخصصی؛ همین امروز سفارش دهید و از تجربه خرید مطمئن و خدمات پس از فروش بهره‌مند شوید.";
+        $len = mb_strlen($base);
+        if($len > 170){
+            $base = "خرید {$name} از صفیر زمان با ضمانت اصالت، ارسال سریع و پشتیبانی تخصصی؛ همین امروز سفارش دهید.";
+        }
+        if(mb_strlen($base) < 110){
+            $base .= ' خریدی مطمئن با امکان بازگشت کالا و مشاوره تخصصی را تجربه کنید.';
+        }
+        return $base;
+    }
+
+    private static function isInternalLink($href,$siteUrl){
+        if($href === '' || $href === null){
+            return false;
+        }
+        if(stripos($href,'javascript:') === 0 || stripos($href,'mailto:') === 0 || stripos($href,'tel:') === 0){
+            return false;
+        }
+        if($href[0] === '#' || $href[0] === '/' || strpos($href,'?') === 0){
+            return true;
+        }
+        if(strpos($href,'//') === 0){
+            $href = 'https:'.$href;
+        }
+        if(stripos($href,'http') !== 0){
+            return true;
+        }
+        if(!$siteUrl){
+            return false;
+        }
+        $baseHost = self::extractHost($siteUrl);
+        if(!$baseHost){
+            return false;
+        }
+        $linkHost = self::extractHost($href);
+        return $linkHost && $linkHost === $baseHost;
+    }
+
+    private static function extractHost($url){
+        if(!$url){
+            return '';
+        }
+        if(stripos($url,'://') === false){
+            $url = 'https://'.$url;
+        }
+        $host = parse_url($url,PHP_URL_HOST);
+        if(!$host){
+            return '';
+        }
+        return preg_replace('/^www\./i','',$host);
     }
 }
 ?>
