@@ -1,0 +1,4 @@
+/vendor/
+composer.lock
+chatgpt.log
+msw_debug.log
