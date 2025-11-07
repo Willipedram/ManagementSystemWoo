@@ -1,0 +1,24 @@
+{
+    "name": "managementsystemwoo/app",
+    "description": "Management dashboard for WooCommerce with process automation, SEO analysis, and ChatGPT integration.",
+    "type": "project",
+    "require": {},
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "autoload": {
+        "classmap": [
+            "classes/"
+        ]
+    },
+    "autoload-dev": {
+        "classmap": [
+            "classes/"
+        ]
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "minimum-stability": "stable",
+    "license": "proprietary"
+}
